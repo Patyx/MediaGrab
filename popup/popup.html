@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>MediaGrab</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>MediaGrab</h1>
+    <div class="actions">
+      <button id="all" class="primary" hidden>Download all</button>
+      <button id="folder" title="Open the folder of your last save">📂 Open folder</button>
+      <button id="settings" class="icon" title="Settings" aria-label="Settings">⚙</button>
+    </div>
+  </header>
+  <div id="notice" hidden></div>
+  <main id="list"><p class="muted">Looking for media…</p></main>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

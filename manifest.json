@@ -1,0 +1,166 @@
+{
+  "manifest_version": 3,
+  "name": "MediaGrab",
+  "version": "0.4.0",
+  "description": "Download videos, images and audio from Reddit, X, Instagram, TikTok and Facebook at the best available quality, with sound.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsHCBISMCgnOLA4ZgT73o6+/VFGlcQmTusWrpEhkzRQ3qPSQqybxzXHWPBC18HSn5pad+o41r8m7ggnznLZZz0lwAKp2OC/60bt0drl5zCT7oUPjWdSmBGcxtzy03z9f0znglKCvbrRw5vGpJ+E6reh4D71wIgRUTchYD+cMF5vUt7Lof9/yK9DEFBelurcDNmgThK4qU2h6bFjWYrxKfvNp5dOMRVaEPIr/Kr8Xm5V1v5awRPG9aa9JvR1nt41ndkTWkqINPFcXxXrvVJsEmYWw/3oX7LHh7K9kGd39uxjxrqYAFM9C+ua10S6HNgCdDODIEeVEEYss5Cipj84vBWQIDAQAB",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "downloads",
+    "downloads.open",
+    "contextMenus",
+    "offscreen",
+    "scripting",
+    "declarativeNetRequestWithHostAccess",
+    "storage",
+    "nativeMessaging",
+    "cookies",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "*://*.reddit.com/*",
+    "*://*.redd.it/*",
+    "*://*.redditmedia.com/*",
+    "*://*.x.com/*",
+    "*://*.twitter.com/*",
+    "*://*.twimg.com/*",
+    "*://*.instagram.com/*",
+    "*://*.cdninstagram.com/*",
+    "*://*.fbcdn.net/*",
+    "*://*.facebook.com/*",
+    "*://*.tiktok.com/*",
+    "*://*.tiktokcdn.com/*",
+    "*://*.tiktokcdn-us.com/*",
+    "*://*.tiktokcdn-eu.com/*",
+    "*://*.tiktokv.com/*",
+    "*://*.tiktokv.us/*",
+    "*://*.tiktokv.eu/*",
+    "*://*.byteoversea.com/*",
+    "*://*.ibyteimg.com/*",
+    "*://*.muscdn.com/*",
+    "*://*.redgifs.com/*",
+    "*://*.imgur.com/*",
+    "*://*.streamable.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "MediaGrab",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.reddit.com/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/reddit.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.x.com/*",
+        "*://*.twitter.com/*"
+      ],
+      "js": [
+        "inject/hook.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.x.com/*",
+        "*://*.twitter.com/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/x.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.instagram.com/*"
+      ],
+      "js": [
+        "inject/hook.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.instagram.com/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/instagram.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.tiktok.com/*"
+      ],
+      "js": [
+        "inject/hook.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.tiktok.com/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/tiktok.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.facebook.com/*"
+      ],
+      "js": [
+        "inject/hook.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.facebook.com/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/facebook.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "optional_host_permissions": [
+    "*://*/*"
+  ]
+}

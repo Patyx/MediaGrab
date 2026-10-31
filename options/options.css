@@ -1,0 +1,81 @@
+:root {
+  --bg: #ffffff;
+  --fg: #111827;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --card: #f9fafb;
+  --accent: #2563eb;
+  --ok: #15803d;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111318;
+    --fg: #e5e7eb;
+    --muted: #9ca3af;
+    --line: #262a33;
+    --card: #181b22;
+    --accent: #3b82f6;
+    --ok: #4ade80;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 20px; margin: 0 0 16px; display: flex; align-items: center; gap: 12px; }
+#saved { font-size: 12px; font-weight: 500; color: var(--ok); }
+section {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
+label { display: block; margin: 10px 0; }
+label > input[type="text"], label > input[type="number"], label > select {
+  display: block;
+  margin-top: 4px;
+  width: 100%;
+  max-width: 320px;
+  padding: 6px 8px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+label.check { display: flex; gap: 8px; align-items: flex-start; }
+label.check input { margin-top: 4px; accent-color: var(--accent); }
+.preview { color: var(--muted); margin: 8px 0 0; overflow-wrap: anywhere; }
+code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; color: var(--fg); }
+#folderRow[aria-disabled="true"] { opacity: .5; }
+button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+ol { padding-left: 20px; }
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px;
+  max-height: 200px;
+  overflow: auto;
+}
+.ok { color: var(--ok); }
+.bad { color: #dc2626; }

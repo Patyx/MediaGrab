@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>MediaGrab settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <h1>MediaGrab settings <span id="saved" hidden>Saved</span></h1>
+
+    <section>
+      <h2>Filenames</h2>
+      <label>Separator between handle and description
+        <input id="separator" type="text" maxlength="10">
+      </label>
+      <label>Description length (characters)
+        <input id="descLength" type="number" min="0" max="200">
+      </label>
+      <label class="check"><input id="prefixHandles" type="checkbox"> Prefix handles (<code>r_</code> for subreddits, <code>@</code> for users)</label>
+      <label>Numbering for multi-item posts
+        <select id="suffixStyle">
+          <option value="_n">name_1, name_2</option>
+          <option value=" (n)">name (1), name (2)</option>
+          <option value=" n">name 1, name 2</option>
+        </select>
+      </label>
+      <p class="preview">Preview: <code id="preview"></code></p>
+    </section>
+
+    <section>
+      <h2>Saving</h2>
+      <label class="check"><input id="saveAs" type="checkbox"> Show the Save As dialog for every file (opens at the last folder you used)</label>
+      <label id="folderRow">Otherwise save silently into this folder inside Downloads
+        <input id="folder" type="text" placeholder="MediaGrab (empty = Downloads itself)">
+      </label>
+    </section>
+
+    <section>
+      <h2>Quality</h2>
+      <label>Maximum resolution
+        <select id="maxHeight">
+          <option value="0">Best available</option>
+          <option value="2160">2160p (4K)</option>
+          <option value="1440">1440p</option>
+          <option value="1080">1080p</option>
+          <option value="720">720p</option>
+          <option value="480">480p</option>
+        </select>
+      </label>
+      <label class="check"><input id="preferH264" type="checkbox"> Prefer H.264, even if that means a lower resolution (plays on every device and editor; TikTok and Instagram sometimes serve HEVC/VP9 at the top quality)</label>
+      <label class="check"><input id="xHls" type="checkbox"> X: use the HLS stream when it's sharper than X's best MP4</label>
+    </section>
+
+    <section>
+      <h2>Audio</h2>
+      <label>Audio-only format
+        <select id="audioFormat">
+          <option value="mp3">MP3 (converted by the helper's ffmpeg; needs the helper)</option>
+          <option value="m4a">M4A (original audio, no re-encoding, works without the helper)</option>
+        </select>
+      </label>
+      <label>MP3 quality
+        <select id="mp3Quality">
+          <option value="0">Best VBR (~245 kbps)</option>
+          <option value="320K">320 kbps</option>
+          <option value="192K">192 kbps</option>
+          <option value="128K">128 kbps</option>
+        </select>
+      </label>
+    </section>
+
+    <section>
+      <h2>MediaGrab Helper (Windows)</h2>
+      <p id="helperStatus" class="preview">Checking…</p>
+      <div id="helperInstall" hidden>
+        <p>The helper adds: the Windows Save dialog opening at your last folder, yt-dlp for YouTube and other sites MediaGrab doesn't support itself, and MP3 audio (converted with ffmpeg).</p>
+        <ol>
+          <li>In the extension folder, open <code>helper</code> and double-click <code>install.bat</code>. It downloads yt-dlp, ffmpeg and Deno (~200&nbsp;MB) into <code>%LOCALAPPDATA%\MediaGrab</code>. No admin rights or winget needed.</li>
+          <li>Come back here and click <b>Check again</b>.</li>
+        </ol>
+      </div>
+      <label class="check"><input id="useHelper" type="checkbox"> Save files through the helper (Windows Save dialog, opens at the last folder you used). Overrides the Saving section above.</label>
+      <p>
+        <button id="helperCheck" type="button">Check again</button>
+        <button id="helperUpdate" type="button" hidden>Update yt-dlp</button>
+      </p>
+      <pre id="helperOut" hidden></pre>
+    </section>
+  </main>
+  <script type="module" src="options.js"></script>
+</body>
+</html>
