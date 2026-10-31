@@ -30,7 +30,8 @@
 
     <section>
       <h2>Saving</h2>
-      <label class="check"><input id="saveAs" type="checkbox"> Show the Save As dialog for every file (opens at the last folder you used)</label>
+      <label class="check"><input id="saveAs" type="checkbox"> Show a Save As dialog for every file</label>
+      <p class="note">Without the helper, Chrome opens this dialog in your Downloads folder. With the helper (below), it opens at the last folder you used.</p>
       <label id="folderRow">Otherwise save silently into this folder inside Downloads
         <input id="folder" type="text" placeholder="MediaGrab (empty = Downloads itself)">
       </label>
@@ -56,10 +57,11 @@
       <h2>Audio</h2>
       <label>Audio-only format
         <select id="audioFormat">
-          <option value="mp3">MP3 (converted by the helper's ffmpeg; needs the helper)</option>
-          <option value="m4a">M4A (original audio, no re-encoding, works without the helper)</option>
+          <option value="mp3">MP3</option>
+          <option value="m4a">M4A (original audio)</option>
         </select>
       </label>
+      <p class="note">MP3 is converted by the helper's ffmpeg; without the helper you get M4A (no re-encoding).</p>
       <label>MP3 quality
         <select id="mp3Quality">
           <option value="0">Best VBR (~245 kbps)</option>

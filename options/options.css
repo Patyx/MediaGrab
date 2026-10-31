@@ -53,6 +53,8 @@ label > input[type="text"], label > input[type="number"], label > select {
 label.check { display: flex; gap: 8px; align-items: flex-start; }
 label.check input { margin-top: 4px; accent-color: var(--accent); }
 .preview { color: var(--muted); margin: 8px 0 0; overflow-wrap: anywhere; }
+.note { color: var(--muted); font-size: 13px; margin: -4px 0 10px 26px; max-width: 520px; }
+label:not(.check) + .note { margin-left: 0; margin-top: 4px; }
 code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; color: var(--fg); }
 #folderRow[aria-disabled="true"] { opacity: .5; }
 button {
