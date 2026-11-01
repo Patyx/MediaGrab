@@ -2,7 +2,7 @@
 // popup, content scripts, the offscreen document and the optional Windows helper.
 import { getSettings as loadSettings, buildName, cleanFolder } from './lib/settings.js';
 import { helperOutdated, helperStatus, helperSave, ytdlpDownload, ytdlpUpdate, ytdlpProbe, cookiesFor, helperOpenFolder, helperOpenFile, helperCompress, helperEncoders } from './lib/helper.js';
-import { fmtSize, fmtRate, encoderName } from './lib/compress.js';
+import { fmtSize, fmtRate } from './lib/compress.js';
 
 // Settings are read on every job; cache them until they change.
 let settingsCache = null;
@@ -48,7 +48,13 @@ chrome.declarativeNetRequest.updateSessionRules({
   }],
 }).catch((e) => console.warn('[MediaGrab] DNR rule failed', e));
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(({ reason }) => {
+  // One-time move from the old default description length (30) to the new one (45).
+  if (reason === 'update') {
+    chrome.storage.sync.get(['descLength', 'descLength45']).then((s) => {
+      if (!s.descLength45) chrome.storage.sync.set({ descLength45: true, ...(Number(s.descLength) === 30 ? { descLength: 45 } : {}) });
+    }).catch(() => {});
+  }
   chrome.contextMenus.removeAll(() => {
     const common = { contexts: ['page', 'link', 'image', 'video'], documentUrlPatterns: MENU_PATTERNS };
     chrome.contextMenus.create({ id: 'mg-post', title: 'Download media from this post', ...common });
@@ -127,7 +133,7 @@ let lastError = null;
 
 // Finished jobs survive service-worker restarts (session storage), so a reopened popup
 // still shows "Saved · size" with its open buttons.
-const PUBLIC = ['jobId', 'key', 'state', 'pct', 'error', 'warning', 'note', 'mode', 'via', 'path', 'size', 'downloadId', 'at'];
+const PUBLIC = ['jobId', 'key', 'state', 'pct', 'kbps', 'error', 'warning', 'note', 'mode', 'via', 'path', 'size', 'downloadId', 'at'];
 const pick = (j) => Object.fromEntries(PUBLIC.map((k) => [k, j[k]]));
 const restored = chrome.storage.session.get('jobs').then(({ jobs: saved }) => {
   for (const j of saved || []) if (!jobs.has(j.jobId)) jobs.set(j.jobId, j);
@@ -264,13 +270,14 @@ async function runCompress(j, input, output) {
       input, output, mode: j.compress === 'force' ? 'force' : 'auto',
       limit720: prefs.limit720, limit1080: prefs.limit1080, encoder: prefs.encoder,
       quality: prefs.quality, x265Preset: prefs.x265Preset, minSavings: prefs.minSavings,
-    }, (pct) => { j.pct = pct; pushStatus(); });
+    }, (ev) => { j.pct = ev.pct; j.kbps = ev.kbps || 0; pushStatus(); });
   } catch (e) {
     j.warning = `compression failed (${e.message}); the original may still be named "${input}"`;
     return { path: input, size: null };
   }
-  if (r.outcome === 'compressed') j.note = `HEVC −${r.savedPct}% (was ${fmtSize(r.origSize)}) · ${encoderName(r.encoder)}`;
+  if (r.outcome === 'compressed') j.note = `HEVC ${100 - r.savedPct}% (was ${fmtSize(r.origSize)})`;
   else if (r.outcome === 'kept') j.note = `kept original: HEVC only saved ${r.savedPct}%`;
+  else if (r.outcome === 'aborted') j.note = `kept original: stopped early, HEVC would only save ~${Math.max(0, r.savedPct)}%`;
   else if (r.outcome === 'under-limit') j.note = `kept original: ${fmtRate(r.vkbps)} is under the ${fmtRate(r.limit)} limit`;
   else if (r.outcome === 'failed') j.warning = `compression failed (${r.error}), saved the original`;
   return { path: r.path, size: r.size };
@@ -384,6 +391,13 @@ const handlers = {
     lastError = null;
     const group = items.length > 1 ? crypto.randomUUID() : null;
     items.forEach((it) => startJob(it, mode || 'media', group, compress?.[it.key] || null));
+  },
+  // Exact size of an item before downloading (asks the server, downloads nothing).
+  async MG_SIZE({ item }) {
+    await ensureOffscreen();
+    const r = await chrome.runtime.sendMessage({ to: 'offscreen', type: 'MG_SIZE', item, prefs: await getSettings() });
+    if (!r?.ok) throw new Error(r?.error || 'size unavailable');
+    return r.data;
   },
   MG_HELPER_ENCODERS({ force }) {
     return helperEncoders(!!force);

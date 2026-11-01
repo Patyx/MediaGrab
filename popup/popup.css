@@ -9,8 +9,8 @@
   --save: #c93f0b;         /* deep orange, matches the app icon; white text stays readable */
   --save-hover: #b03507;
   --save-fg: #ffffff;
-  --audio-bg: #fdeee6;
-  --audio-fg: #b03507;
+  --audio-bg: #ede9fe;
+  --audio-fg: #6d28d9;
   --ok: #15803d;
   --warn: #b45309;
   --err: #dc2626;
@@ -26,8 +26,8 @@
     --accent: #3b82f6;
     --save: #d9480f;
     --save-hover: #ea580c;
-    --audio-bg: #3a1d10;
-    --audio-fg: #fdba74;
+    --audio-bg: #2a1f45;
+    --audio-fg: #c4b5fd;
     --ok: #4ade80;
     --warn: #fbbf24;
     --err: #f87171;
@@ -142,8 +142,10 @@ button:focus-visible { outline: 2px solid var(--save); outline-offset: 2px; }
   margin-bottom: 8px;
 }
 .thumb {
-  width: 60px;
-  height: 60px;
+  width: 72px;
+  height: auto;
+  min-height: 64px;
+  align-self: stretch;
   flex: none;
   border-radius: 8px;
   object-fit: cover;
@@ -193,18 +195,41 @@ button.mini:hover { border-color: var(--save); }
 /* "Compress to HEVC" toggle chip */
 .chip-slot { grid-column: 1 / -1; }
 .chip-slot:empty { display: none; }
-button.chip {
+/* Compress on/off switch (orange like Save when on) */
+.btns button.toggle {
   width: 100%;
-  padding: 3px 4px;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 7px;
+  padding: 4px 7px;
   font-size: 12px;
   font-weight: 600;
   border-radius: 7px;
   background: var(--bg);
   color: var(--muted);
 }
-button.chip:disabled { opacity: .55; cursor: not-allowed; }
-button.chip[aria-pressed="true"] {
-  color: var(--audio-fg);
-  background: var(--audio-bg);
-  border-color: color-mix(in srgb, var(--audio-fg) 45%, transparent);
+.toggle .track {
+  position: relative;
+  width: 26px;
+  height: 14px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--line);
+  transition: background .15s;
 }
+.toggle .knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform .15s, background .15s;
+}
+.toggle[aria-checked="true"] { color: var(--fg); border-color: color-mix(in srgb, var(--save) 55%, transparent); }
+.toggle[aria-checked="true"] .track { background: var(--save); }
+.toggle[aria-checked="true"] .knob { transform: translateX(12px); background: #fff; }
+.btns button.toggle:disabled { opacity: .55; cursor: not-allowed; }
+/* Save / Audio after the file is saved: Play / Open */
+button.save.played, button.audio.played { box-shadow: inset 0 0 0 2px color-mix(in srgb, #fff 30%, transparent); }

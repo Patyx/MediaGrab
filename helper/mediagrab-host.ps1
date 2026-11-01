@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$Version = '1.4.0'
+$Version = '1.5.0'
 $null = Add-Type -AssemblyName System.Windows.Forms
 $null = Add-Type -AssemblyName System.Drawing
 
@@ -193,9 +193,18 @@ function Invoke-Tool([string]$exe, [string[]]$argv, [scriptblock]$onLine) {
   $psi.EnvironmentVariables['PATH'] = $env:Path
   $p = [Diagnostics.Process]::Start($psi)
   $errTask = $p.StandardError.ReadToEndAsync()
-  while ($null -ne ($line = $p.StandardOutput.ReadLine())) { if ($onLine) { $null = & $onLine $line } }
+  $aborted = $false
+  while ($null -ne ($line = $p.StandardOutput.ReadLine())) {
+    if (-not $onLine) { continue }
+    # A callback may return 'abort' to stop the process early (e.g. compression not worth it).
+    if (@(& $onLine $line) -contains 'abort') {
+      $aborted = $true
+      try { $p.Kill() } catch {}
+      break
+    }
+  }
   $p.WaitForExit()
-  return @{ code = $p.ExitCode; err = $errTask.Result }
+  return @{ code = $p.ExitCode; err = $errTask.Result; aborted = $aborted }
 }
 
 function Get-YtdlpError([string]$err) {
@@ -473,12 +482,22 @@ function Invoke-Compress($m) {
 
     $ff = Get-Ff 'ffmpeg'
     $tmp = "$outPath.mg-hevc.mp4"
-    $state = @{ last = -1; dur = $probe.dur }
+    # The compressed file is saved next to the original's name with "_comp" appended.
+    $compPath = Get-UniquePath ([IO.Path]::Combine([IO.Path]::GetDirectoryName($outPath), [IO.Path]::GetFileNameWithoutExtension($outPath) + '_comp.mp4'))
+    $state = @{ last = -1; dur = $probe.dur; t = 0.0; bytes = 0.0; kbps = 0; orig = [double]$probe.size; min = [double]$m.minSavings; projected = 0.0 }
     $onLine = {
       param($l)
-      if ($l -match '^out_time_(?:us|ms)=(\d+)' -and $state.dur -gt 0) {
-        $pct = [int][math]::Min(99, [double]$Matches[1] / 1e6 / $state.dur * 100)
-        if ($pct -ne $state.last) { $state.last = $pct; Send @{ rid = $m.rid; event = 'progress'; pct = $pct } }
+      if ($l -match '^out_time_(?:us|ms)=(\d+)') { $state.t = [double]$Matches[1] / 1e6; return }
+      if ($l -match '^total_size=(\d+)') { $state.bytes = [double]$Matches[1]; return }
+      if ($l -match '^bitrate=\s*([\d.]+)kbits') { $state.kbps = [int][double]$Matches[1]; return }
+      if ($l -notmatch '^progress=' -or $state.dur -le 0) { return }
+      $frac = [math]::Min(1, $state.t / $state.dur)
+      $pct = [int][math]::Min(99, $frac * 100)
+      if ($pct -ne $state.last) { $state.last = $pct; Send @{ rid = $m.rid; event = 'progress'; pct = $pct; kbps = $state.kbps } }
+      # From 20% on, project the final size; stop early if it won't save enough.
+      if ($frac -ge 0.2 -and $state.bytes -gt 0) {
+        $state.projected = $state.bytes / $frac
+        if ($state.projected -gt $state.orig * (1 - $state.min / 100)) { return 'abort' }
       }
     }
     $encode = {
@@ -489,12 +508,20 @@ function Invoke-Compress($m) {
         @('-tag:v', 'hvc1', '-movflags', '+faststart', '-map_metadata', '0', '-progress', 'pipe:1', '-nostats', $tmp)
       return Invoke-Tool $ff $argv $onLine
     }
+    $abortResult = {
+      Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+      Move-Result $in $outPath
+      $proj = [math]::Round((1 - $state.projected / $state.orig) * 100)
+      Send ($base + @{ path = $outPath; size = $probe.size; outcome = 'aborted'; savedPct = $proj; encoder = $choice })
+    }
     $r = & $encode $choice $tier
+    if ($r.aborted) { & $abortResult; return }
     if ($r.code -ne 0 -and $choice -ne 'x265') {
       # GPU encoder failed on this file: fall back to the CPU.
       Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
       $choice = 'x265'
       $r = & $encode 'x265' $null
+      if ($r.aborted) { & $abortResult; return }
     }
     if ($r.code -ne 0) {
       Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
@@ -509,9 +536,9 @@ function Invoke-Compress($m) {
       Send ($base + @{ path = $outPath; size = $probe.size; outcome = 'kept'; savedPct = $saved; encoder = $choice })
       return
     }
-    Move-Item -LiteralPath $tmp -Destination $outPath -Force
-    if ($in -ne $outPath) { Remove-Item -LiteralPath $in -Force -ErrorAction SilentlyContinue }
-    Send ($base + @{ path = $outPath; size = $newSize; outcome = 'compressed'; savedPct = $saved; encoder = $choice })
+    Move-Item -LiteralPath $tmp -Destination $compPath -Force
+    Remove-Item -LiteralPath $in -Force -ErrorAction SilentlyContinue
+    Send ($base + @{ path = $compPath; size = $newSize; outcome = 'compressed'; savedPct = $saved; encoder = $choice })
   } catch {
     # Never lose the download: put the original where the user asked for it.
     if ((Test-Path -LiteralPath $in) -and -not (Test-Path -LiteralPath $outPath)) { Move-Result $in $outPath }

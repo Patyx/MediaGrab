@@ -10,6 +10,13 @@ const send = (msg) => chrome.runtime.sendMessage({ to: 'sw', ...msg }).catch(() 
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.to !== 'offscreen') return;
+  if (msg.type === 'MG_SIZE') {
+    itemSize(msg.item, msg.prefs || {}).then(
+      (data) => sendResponse({ ok: true, data }),
+      (e) => sendResponse({ ok: false, error: String(e?.message || e) }),
+    );
+    return true;
+  }
   if (msg.type === 'MG_JOB') runJob(msg.jobId, msg.item, msg.prefs || {}, msg.mode, msg.name, msg.compress);
   else if (msg.type === 'MG_REVOKE') URL.revokeObjectURL(msg.url);
   sendResponse({ ok: true });
@@ -139,6 +146,41 @@ function concat(chunks, size) {
   let o = 0;
   for (const c of chunks) { out.set(c, o); o += c.length; }
   return out;
+}
+
+// ---------------------------------------------------------------- sizes before download
+
+// Size of the first URL that answers: a HEAD request, or a 1-byte range request whose
+// Content-Range carries the total. Nothing is downloaded.
+async function sizeOf(urls) {
+  for (const url of [].concat(urls).filter(Boolean)) {
+    try {
+      let r = await fetch(url, { method: 'HEAD', credentials: 'include' });
+      let n = r.ok ? Number(r.headers.get('content-length')) || 0 : 0;
+      if (!n || /text\/html/i.test(r.headers.get('content-type') || '')) {
+        const ctl = new AbortController();
+        r = await fetch(url, { headers: { Range: 'bytes=0-0' }, credentials: 'include', signal: ctl.signal });
+        n = Number((r.headers.get('content-range') || '').split('/')[1]) || (r.status === 200 ? Number(r.headers.get('content-length')) || 0 : 0);
+        ctl.abort();
+      }
+      if (n > 0 && !/text\/html/i.test(r.headers.get('content-type') || '')) return n;
+    } catch {}
+  }
+  return 0;
+}
+
+// Exact size of what a download of this item would fetch: { bytes, vbytes? } or null.
+async function itemSize(item, prefs) {
+  const plan = await resolve(item.source, prefs);
+  if (plan.video) {
+    if (plan.video.hls) return null; // segmented stream: no single size to ask for
+    const v = await sizeOf(plan.video.urls);
+    if (!v) return null;
+    const a = plan.audio ? await sizeOf(plan.audio.urls) : 0;
+    return { bytes: v + a, vbytes: v };
+  }
+  const n = await sizeOf(plan.single.urls);
+  return n ? { bytes: n } : null;
 }
 
 async function getJson(url, headers) {

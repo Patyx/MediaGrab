@@ -86,7 +86,7 @@
   // "<handle> - <first 30 chars of description>[_n]"
   MG.filename = (p) => {
     const handle = trimEnds(MG.fileSafe(p.handle ?? p.author)) || p.site;
-    const desc = trimEnds(Array.from(MG.fileSafe(p.desc)).slice(0, 30).join('')) || MG.fileSafe(p.postId);
+    const desc = trimEnds(Array.from(MG.fileSafe(p.desc)).slice(0, 45).join('')) || MG.fileSafe(p.postId);
     return `${handle} - ${desc}${p.count > 1 ? `_${p.index + 1}` : ''}`;
   };
 
@@ -118,7 +118,7 @@
   MG.est = ({ vbps, abps = 0, w = 0, h = 0, dur = 0, bytes = 0 }) => {
     if (!vbps && !bytes) return null;
     const total = bytes || (dur ? Math.round(((vbps || 0) + (abps || 0)) / 8 * dur) : 0);
-    return { vkbps: vbps ? Math.round(vbps / 1000) : 0, w, h, bytes: total || 0 };
+    return { vkbps: vbps ? Math.round(vbps / 1000) : 0, w, h, bytes: total || 0, dur: dur || 0 };
   };
 
   // Best video + audio bandwidth from a DASH manifest (for estimates only).

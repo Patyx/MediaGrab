@@ -66,7 +66,7 @@ function estLine(est) {
 }
 function setEst(line, est) {
   const parts = [];
-  if (est?.bytes) parts.push(`≈ ${fmtSize(est.bytes)}`);
+  if (est?.bytes) parts.push(est.exact ? fmtSize(est.bytes) : `≈ ${fmtSize(est.bytes)}`);
   if (est?.vkbps) parts.push(fmtRate(est.vkbps));
   line.textContent = parts.join(' · ');
 }
@@ -92,20 +92,20 @@ function renderItem(it) {
   const status = el('div', 'status', '');
   meta.append(est, status);
   const btns = saveButtons(() => download([it]), it.kind === 'video' ? () => download([it], 'audio') : null, it.kind);
-  rows.set(it.key, { status, kind: it.kind, est, chipSlot: btns.chipSlot, item: it });
+  rows.set(it.key, { status, kind: it.kind, est, chipSlot: btns.chipSlot, btns, item: it });
   row.append(thumb, meta, btns);
   return row;
 }
 
-// Compress toggle chip. Shown only when the helper (which does the encoding) is available.
+// Compress on/off switch. Shown only when the helper (which does the encoding) is available.
 function makeChip(key, initialOn) {
   compressState.set(key, { on: initialOn, touched: false });
-  const chip = el('button', 'chip');
-  const paint = () => {
-    const on = compressState.get(key).on;
-    chip.textContent = on ? 'Compress ✓' : 'Compress';
-    chip.setAttribute('aria-pressed', String(on));
-  };
+  const chip = el('button', 'toggle');
+  chip.setAttribute('role', 'switch');
+  const track = el('span', 'track');
+  track.append(el('span', 'knob'));
+  chip.append(track, el('span', 'tlabel', 'Compress'));
+  const paint = () => chip.setAttribute('aria-checked', String(compressState.get(key).on));
   chip.title = 'Re-encode to HEVC after saving (keeps the original if it saves too little)';
   chip.onclick = () => {
     const c = compressState.get(key);
@@ -135,11 +135,41 @@ async function decorate() {
       r.chipSlot.append(outdated ? outdatedChip(helper.version) : makeChip(key, prefs.autoCompress && over !== false));
     }
   }
+  fetchSizes(prefs);
+}
+
+// Ask the servers for exact sizes (no downloading), 4 at a time, and refresh each row.
+async function fetchSizes(prefs) {
+  const queue = [...rows.entries()].filter(([, r]) => r.item);
+  const worker = async () => {
+    for (let next; (next = queue.shift());) {
+      const [key, r] = next;
+      const res = await sw({ type: 'MG_SIZE', item: r.item }).catch(() => null);
+      if (!res?.ok || !res.data?.bytes) continue;
+      const est = { ...(r.item.est || {}), bytes: res.data.bytes, exact: true };
+      if (est.dur) {
+        // Video bitrate from the real size (minus ~128 kbps audio when it's one muxed file).
+        const vbytes = res.data.vbytes || Math.max(0, res.data.bytes - (128000 / 8) * est.dur);
+        est.vkbps = Math.round((vbytes * 8) / est.dur / 1000);
+      }
+      r.item.est = est;
+      setEst(r.est, est);
+      if (r.kind !== 'video') continue;
+      const over = overLimit(est, prefs);
+      r.est.classList.toggle('over', !!over);
+      const c = compressState.get(key);
+      if (c && !c.touched) { c.on = !!(prefs.autoCompress && over !== false); r.chipSlot.firstChild?.repaint?.(); }
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
 }
 
 // Compression needs helper 1.4+: show why it's unavailable instead of failing silently.
 function outdatedChip(version) {
-  const chip = el('button', 'chip', 'Compress');
+  const chip = el('button', 'toggle');
+  const track = el('span', 'track');
+  track.append(el('span', 'knob'));
+  chip.append(track, el('span', 'tlabel', 'Compress'));
   chip.disabled = true;
   chip.title = `The MediaGrab Helper on this PC (${version || 'old version'}) is too old to compress. Run helper\\install.bat again.`;
   return chip;
@@ -155,6 +185,7 @@ function saveButtons(onSave, onAudio, kind = 'video') {
   save.append(el('span', 'ico', '⬇'), el('span', 'lbl', 'Save'));
   save.onclick = onSave;
   btns.append(save);
+  btns.save = save;
   if (onAudio) {
     const audio = el('button', 'audio');
     audio.title = 'Save audio only';
@@ -162,6 +193,7 @@ function saveButtons(onSave, onAudio, kind = 'video') {
     audio.append(el('span', 'ico', '♪'), el('span', 'lbl', 'Audio'));
     audio.onclick = onAudio;
     btns.append(audio);
+    btns.audio = audio;
   }
   btns.chipSlot = el('div', 'chip-slot');
   btns.append(btns.chipSlot);
@@ -182,7 +214,7 @@ const TEXT = {
   downloading: (j) => `Downloading${j.pct ? ` ${j.pct}%` : '…'}`,
   merging: (j) => (j.mode === 'audio' ? 'Extracting…' : 'Merging video + audio…'),
   saving: () => 'Saving…',
-  compressing: (j) => `Compressing to HEVC${j.pct ? ` ${j.pct}%` : '…'}`,
+  compressing: (j) => `Compressing…${j.pct ? ` ${j.pct}%` : ''}${j.kbps ? ` · ${fmtRate(j.kbps)}` : ''}`,
   done: (j) => (j.warning ? `Saved, but ${j.warning}` : 'Saved ✓'),
   error: (j) => `Failed: ${j.error}`,
   cancelled: () => 'Cancelled',
@@ -211,12 +243,19 @@ function fileButtons(j, kind) {
   folder.title = 'Show in folder';
   folder.setAttribute('aria-label', folder.title);
   folder.onclick = () => openSaved(j, true);
-  const open = el('button', 'mini', kind === 'image' ? '↗' : '▶');
-  open.title = kind === 'image' ? 'Open image' : j.mode === 'audio' ? 'Play audio' : 'Play video';
-  open.setAttribute('aria-label', open.title);
-  open.onclick = () => openSaved(j, false);
-  wrap.append(folder, open);
+  wrap.append(folder);
   return wrap;
+}
+
+// After saving, the Save (or Audio) button becomes Play / Open for the saved file.
+function turnToPlay(btn, j, kind) {
+  if (!btn) return;
+  const image = kind === 'image';
+  btn.replaceChildren(el('span', 'ico', image ? '↗' : '▶'), el('span', 'lbl', image ? 'Open' : 'Play'));
+  btn.title = image ? 'Open the saved image' : j.mode === 'audio' ? 'Play the saved audio' : 'Play the saved video';
+  btn.setAttribute('aria-label', btn.title);
+  btn.classList.add('played');
+  btn.onclick = () => openSaved(j, false);
 }
 
 function setStatus(key, j) {
@@ -231,7 +270,10 @@ function setStatus(key, j) {
   if (done && j.size) text += ` · ${fmtSize(j.size)}`;
   if (done && j.note) text += ` · ${j.note}`;
   s.replaceChildren(el('span', '', text));
-  if (done && (j.path || j.downloadId != null)) s.append(fileButtons(j, r.kind));
+  if (done && (j.path || j.downloadId != null)) {
+    s.append(fileButtons(j, r.kind));
+    turnToPlay(j.mode === 'audio' ? r.btns?.audio : r.btns?.save, j, r.kind);
+  }
   s.className = 'status' + (j.state === 'error' ? ' err' : done ? (j.warning ? ' warn' : ' ok') : '');
 }
 
@@ -332,11 +374,13 @@ async function renderYtdlp(tab, helper) {
   const est = el('div', 'est', '');
   const status = el('div', 'status', '');
   meta.append(sel, hint, est, status);
-  rows.set(key, { status, kind: 'video' });
+  const row0 = { status, kind: 'video' };
+  rows.set(key, row0);
   const btns = saveButtons(
     () => ytdlp(tab.url, false, key, sel.value ? Number(sel.value) : null),
     () => ytdlp(tab.url, true, key),
   );
+  row0.btns = btns;
   const prefs = await prefsP;
   let chip = null;
   if (prefs.useHelper) {
