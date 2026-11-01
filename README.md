@@ -61,7 +61,7 @@ To install it, double-click `helper\install.bat`. It needs no admin rights, wing
 - downloads `yt-dlp.exe`, ffmpeg and Deno (which yt-dlp needs for YouTube) from their official GitHub releases (~200 MB);
 - registers the helper with Chrome (one per-user registry key).
 
-Then open MediaGrab's settings (⚙ in the popup) and click **Check again**. It should say *Connected*. Run `install.bat` again any time to update the helper; **Update yt-dlp** in Settings updates yt-dlp. `helper\uninstall.bat` removes everything.
+Then open MediaGrab's settings (⚙ in the popup) and click **Check again**. It should say *Connected*. Run `install.bat` again any time to update the helper; **Update yt-dlp** in Settings updates yt-dlp. `helper\uninstall.bat` removes everything. The last compression's ffmpeg output is kept in `%LOCALAPPDATA%\MediaGrab\last-compress.log` for troubleshooting.
 
 The extension has a fixed ID (`akdihefcbbgbeokfllakmflnelonapfa`, set by the public `key` in `manifest.json`), so the helper keeps recognising it wherever the folder lives.
 

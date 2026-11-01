@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$Version = '1.5.2'
+$Version = '1.5.3'
 $null = Add-Type -AssemblyName System.Windows.Forms
 $null = Add-Type -AssemblyName System.Drawing
 
@@ -205,6 +205,46 @@ function Invoke-Tool([string]$exe, [string[]]$argv, [scriptblock]$onLine) {
   }
   $p.WaitForExit()
   return @{ code = $p.ExitCode; err = $errTask.Result; aborted = $aborted }
+}
+
+# Runs ffmpeg and reads its stderr live, splitting on CR as well as LF (the console
+# status line rewrites itself with CR). Progress comes from both that status line and
+# -progress pipe:2 key=value blocks. Every line is also written to $logPath.
+function Invoke-Ffmpeg([string]$exe, [string[]]$argv, [scriptblock]$onLine, [string]$logPath) {
+  $psi = New-Object Diagnostics.ProcessStartInfo $exe
+  $psi.Arguments = ($argv | ForEach-Object { ConvertTo-Arg $_ }) -join ' '
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $true
+  $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
+  $p = [Diagnostics.Process]::Start($psi)
+  $outTask = $p.StandardOutput.ReadToEndAsync()
+  $log = $null
+  try { $log = New-Object IO.StreamWriter($logPath, $false, [Text.Encoding]::UTF8); $log.AutoFlush = $true; $log.WriteLine("ffmpeg $($psi.Arguments)") } catch {}
+  $err = New-Object Text.StringBuilder
+  $sb = New-Object Text.StringBuilder
+  $buf = New-Object char[] 4096
+  $cr = [char]13; $lf = [char]10
+  $aborted = $false
+  $sr = $p.StandardError
+  while (-not $aborted -and ($n = $sr.Read($buf, 0, $buf.Length)) -gt 0) {
+    for ($i = 0; $i -lt $n; $i++) {
+      $c = $buf[$i]
+      if ($c -ne $cr -and $c -ne $lf) { $null = $sb.Append($c); continue }
+      if ($sb.Length -eq 0) { continue }
+      $l = $sb.ToString()
+      $null = $sb.Clear()
+      if ($log) { $log.WriteLine($l) }
+      if ($l -notmatch '^[a-z_0-9]+=\S*$' -and $l -notmatch '^frame=\s*\d+\s+fps=') { $null = $err.AppendLine($l) }
+      if ($onLine -and (@(& $onLine $l) -contains 'abort')) { $aborted = $true; break }
+    }
+  }
+  if ($aborted) { try { $p.Kill() } catch {} }
+  $p.WaitForExit()
+  if ($log) { $log.WriteLine("exit $($p.ExitCode)$(if ($aborted) { ' (stopped early)' })"); $log.Dispose() }
+  $null = $outTask.Result
+  return @{ code = $p.ExitCode; err = $err.ToString(); aborted = $aborted }
 }
 
 function Get-YtdlpError([string]$err) {
@@ -502,21 +542,34 @@ function Invoke-Compress($m) {
     # The compressed file is saved next to the original's name with "_comp" appended.
     $compPath = Get-UniquePath ([IO.Path]::Combine([IO.Path]::GetDirectoryName($outPath), [IO.Path]::GetFileNameWithoutExtension($outPath) + '_comp.mp4'))
     $state = @{ last = -1; dur = $probe.dur; frames = [double]$probe.frames; f = 0.0; t = 0.0; bytes = 0.0; kbps = 0
-      orig = [double]$probe.size; audio = [double]$probe.audioBytes; min = [double]$m.minSavings; projected = 0.0 }
+      orig = [double]$probe.size; audio = [double]$probe.audioBytes; min = [double]$m.minSavings; projected = 0.0; sent = 0 }
     $onLine = {
       param($l)
-      if ($l -match '^frame=(\d+)') { $state.f = [double]$Matches[1]; return }
-      if ($l -match '^out_time_(?:us|ms)=(\d+)') { $state.t = [double]$Matches[1] / 1e6; return }
-      if ($l -match '^total_size=(\d+)') { $state.bytes = [double]$Matches[1]; return }
-      if ($l -match '^bitrate=\s*([\d.]+)kbits') { $state.kbps = [int][double]$Matches[1]; return }
-      if ($l -notmatch '^progress=') { return }
+      if ($l -match '^frame=\s*(\d+)\s+fps=') {
+        # Console status line: "frame= 1234 fps= 56 q=28.0 size=  12345KiB time=00:01:23.45 bitrate=1234.5kbits/s speed=1.9x"
+        $state.f = [double]$Matches[1]
+        if ($l -match 'size=\s*(\d+)\s*(?:kB|KiB)') { $state.bytes = [double]$Matches[1] * 1024 }
+        if ($l -match 'time=(\d+):(\d+):([\d.]+)') { $state.t = [double]$Matches[1] * 3600 + [double]$Matches[2] * 60 + [double]$Matches[3] }
+        if ($l -match 'bitrate=\s*([\d.]+)kbits') { $state.kbps = [int][double]$Matches[1] }
+      } else {
+        if ($l -match '^frame=(\d+)$') { $state.f = [double]$Matches[1]; return }
+        if ($l -match '^out_time_(?:us|ms)=(\d+)') { $state.t = [double]$Matches[1] / 1e6; return }
+        if ($l -match '^total_size=(\d+)') { $state.bytes = [double]$Matches[1]; return }
+        if ($l -match '^bitrate=\s*([\d.]+)kbits') { $state.kbps = [int][double]$Matches[1]; return }
+        if ($l -notmatch '^progress=') { return }
+      }
       # Progress = encoded video frames / total. (out_time follows the copied audio, which
       # races ahead of the video encoder, so it is only a fallback.)
       if ($state.frames -gt 0) { $frac = [math]::Min(1, $state.f / $state.frames) }
       elseif ($state.dur -gt 0) { $frac = [math]::Min(1, $state.t / $state.dur) }
       else { return }
       $pct = [int][math]::Min(99, $frac * 100)
-      if ($pct -ne $state.last) { $state.last = $pct; Send @{ rid = $m.rid; event = 'progress'; pct = $pct; kbps = $state.kbps } }
+      $now = [Environment]::TickCount
+      if ($pct -ne $state.last -or ($now - $state.sent) -ge 1000) {
+        $state.last = $pct
+        $state.sent = $now
+        Send @{ rid = $m.rid; event = 'progress'; pct = $pct; kbps = $state.kbps }
+      }
       # From 20% on, project the final size (audio is copied as-is, video scales with
       # progress); stop early if it won't save enough.
       if ($frac -ge 0.2 -and $state.bytes -gt 0) {
@@ -530,8 +583,8 @@ function Invoke-Compress($m) {
       $q = Get-Quality $enc ([string]$m.quality)
       $argv = @('-hide_banner', '-nostdin', '-y', '-v', 'error', '-i', $in, '-map', '0:v:0', '-map', '0:a?', '-c:a', 'copy') +
         (Get-EncoderArgs $enc $q $cap $tr ([string]$m.x265Preset)) +
-        @('-tag:v', 'hvc1', '-movflags', '+faststart', '-map_metadata', '0', '-progress', 'pipe:1', '-nostats', $tmp)
-      return Invoke-Tool $ff $argv $onLine
+        @('-tag:v', 'hvc1', '-movflags', '+faststart', '-map_metadata', '0', '-stats', '-stats_period', '0.5', '-progress', 'pipe:2', $tmp)
+      return Invoke-Ffmpeg $ff $argv $onLine (Join-Path $Root 'last-compress.log')
     }
     $abortResult = {
       Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
