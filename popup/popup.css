@@ -144,6 +144,8 @@ button:focus-visible { outline: 2px solid var(--save); outline-offset: 2px; }
   margin-bottom: 8px;
 }
 .thumb {
+  position: relative;
+  overflow: hidden;
   width: 72px;
   height: auto;
   min-height: 64px;
@@ -258,3 +260,21 @@ button.save.played, button.audio.played { box-shadow: inset 0 0 0 2px color-mix(
   .pbar i { transition: none; }
   .pbar.pending .dl { animation: none; left: 0; }
 }
+
+/* The image is cropped to the card's height instead of stretching the card */
+.thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+/* "Audio only" wraps onto two lines inside the slim button */
+button.audio .lbl { white-space: normal; text-align: center; line-height: 1.1; padding: 0 2px; }
+/* Compress an already-saved video */
+.btns button.compress-now {
+  width: 100%;
+  flex-direction: row;
+  padding: 4px 7px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--save);
+  border-color: color-mix(in srgb, var(--save) 55%, transparent);
+}
+.btns button.compress-now:disabled { opacity: .55; cursor: progress; }

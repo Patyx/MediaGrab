@@ -12,6 +12,7 @@ let items = [];
 // pre-ticked by the auto setting sends 'auto' (helper re-checks the real bitrate); one the
 // user ticked sends 'force'.
 const compressState = new Map();
+let compressReady = false; // helper installed, enabled and new enough
 const compressMode = (key) => {
   const c = compressState.get(key);
   return c?.on ? (c.touched ? 'force' : 'auto') : null;
@@ -73,17 +74,20 @@ function setEst(line, est) {
 
 function renderItem(it) {
   const row = el('div', 'row');
-  let thumb;
+  // Thumbnail box takes the card's height; the image is cropped to it.
+  const thumb = el('div', 'thumb');
+  const glyph = it.kind === 'video' ? '▶' : '▣';
   if (it.thumb) {
-    thumb = el('img', 'thumb');
-    thumb.src = it.thumb;
-    thumb.alt = '';
-    thumb.referrerPolicy = 'no-referrer';
-    thumb.loading = 'lazy';
-    thumb.decoding = 'async';
-    thumb.onerror = () => thumb.replaceWith(el('div', 'thumb', it.kind === 'video' ? '▶' : '▣'));
+    const img = el('img');
+    img.src = it.thumb;
+    img.alt = '';
+    img.referrerPolicy = 'no-referrer';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.onerror = () => img.replaceWith(glyph);
+    thumb.append(img);
   } else {
-    thumb = el('div', 'thumb', it.kind === 'video' ? '▶' : '▣');
+    thumb.textContent = glyph;
   }
   const meta = el('div', 'meta');
   const n = it.count > 1 ? ` ${it.index + 1}/${it.count}` : '';
@@ -124,6 +128,7 @@ async function decorate() {
   const [prefs, helper] = await Promise.all([prefsP, helperP]);
   const canCompress = !!(helper?.installed && prefs.useHelper);
   const outdated = canCompress && helperOutdated(helper.version);
+  compressReady = canCompress && !outdated;
   for (const [key, r] of rows) {
     if (r.kind !== 'video' || !r.item) continue;
     const over = overLimit(r.item.est, prefs);
@@ -135,6 +140,11 @@ async function decorate() {
       // Pre-tick when over the limit; unknown bitrate + auto still lets the helper decide.
       r.chipSlot.append(outdated ? outdatedChip(helper.version) : makeChip(key, prefs.autoCompress && over !== false));
     }
+  }
+  // Rows restored before we knew compression is available: redraw their status/buttons.
+  if (lastStatus) {
+    for (const r of rows.values()) r.sig = null;
+    applyStatus(lastStatus);
   }
   fetchSizes(prefs);
 }
@@ -191,7 +201,7 @@ function saveButtons(onSave, onAudio, kind = 'video') {
     const audio = el('button', 'audio');
     audio.title = 'Save audio only';
     audio.setAttribute('aria-label', audio.title);
-    audio.append(el('span', 'ico', '♪'), el('span', 'lbl', 'Audio'));
+    audio.append(el('span', 'ico', '♪'), el('span', 'lbl', 'Audio only'));
     audio.onclick = onAudio;
     btns.append(audio);
     btns.audio = audio;
@@ -215,7 +225,7 @@ const TEXT = {
   downloading: (j) => `Downloading${j.pct ? ` ${j.pct}%` : '…'}`,
   merging: (j) => (j.mode === 'audio' ? 'Extracting…' : 'Merging video + audio…'),
   saving: () => 'Saving…',
-  compressing: (j) => `Compressing…${j.pct ? ` ${j.pct}%` : ''}${j.kbps ? ` · ${fmtRate(j.kbps)}` : ''}`,
+  compressing: (j) => (j.pct >= 99 ? 'Finishing…' : `Compressing…${j.pct ? ` ${j.pct}%` : ''}${j.kbps ? ` · ${fmtRate(j.kbps)}` : ''}`),
   done: (j) => (j.warning ? `Saved, but ${j.warning}` : 'Saved ✓'),
   error: (j) => `Failed: ${j.error}`,
   cancelled: () => 'Cancelled',
@@ -246,6 +256,21 @@ function fileButtons(j, kind) {
   folder.onclick = () => openSaved(j, true);
   wrap.append(folder);
   return wrap;
+}
+
+// A saved video that wasn't compressed gets a "Compress" button for the saved file.
+function offerCompressLater(r, key, j) {
+  if (!r.chipSlot || !compressReady || !j.path || /^HEVC/.test(j.note || '')) {
+    if (r.chipSlot && /^HEVC/.test(j.note || '')) r.chipSlot.replaceChildren();
+    return;
+  }
+  const btn = el('button', 'compress-now', '⇣ Compress');
+  btn.title = 'Compress the saved file to HEVC now (keeps the original if it saves too little)';
+  btn.onclick = () => {
+    btn.disabled = true;
+    sw({ type: 'MG_COMPRESS_FILE', key, path: j.path }).catch(() => {});
+  };
+  r.chipSlot.replaceChildren(btn);
 }
 
 // After saving, the Save (or Audio) button becomes Play / Open for the saved file.
@@ -297,11 +322,15 @@ function setStatus(key, j) {
   if (done && (j.path || j.downloadId != null)) {
     s.append(fileButtons(j, r.kind));
     turnToPlay(j.mode === 'audio' ? r.btns?.audio : r.btns?.save, j, r.kind);
+    if (r.kind === 'video' && j.mode !== 'audio') offerCompressLater(r, key, j);
   }
+  if (j.state === 'compressing' && r.chipSlot) r.chipSlot.replaceChildren();
   s.className = 'status' + (j.state === 'error' ? ' err' : done ? (j.warning ? ' warn' : ' ok') : '');
 }
 
+let lastStatus = null;
 function applyStatus(data) {
+  lastStatus = data;
   for (const j of data?.jobs || []) setStatus(j.key, j); // later jobs for the same key win
   noticeEl.hidden = !data?.lastError;
   noticeEl.textContent = data?.lastError || '';
@@ -405,7 +434,9 @@ async function renderYtdlp(tab, helper) {
     () => ytdlp(tab.url, true, key),
   );
   row0.btns = btns;
+  row0.chipSlot = btns.chipSlot;
   const prefs = await prefsP;
+  compressReady = !!(prefs.useHelper && helper?.installed && !helperOutdated(helper.version));
   let chip = null;
   if (prefs.useHelper) {
     chip = helperOutdated(helper.version) ? null : makeChip(key, false);

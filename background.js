@@ -399,6 +399,17 @@ const handlers = {
     if (!r?.ok) throw new Error(r?.error || 'size unavailable');
     return r.data;
   },
+  // Compress a video that was already saved (the user changed their mind afterwards).
+  async MG_COMPRESS_FILE({ key, path }) {
+    if (!path) throw new Error('No saved file to compress');
+    const j = upsert({ jobId: crypto.randomUUID(), key, name: null, mode: 'media' });
+    j.compress = 'force';
+    pushStatus();
+    (async () => {
+      finish(j, await runCompress(j, path, path));
+      pushStatus();
+    })();
+  },
   MG_HELPER_ENCODERS({ force }) {
     return helperEncoders(!!force);
   },

@@ -1,5 +1,5 @@
 import { DEFAULTS, getSettings, buildName } from '../lib/settings.js';
-import { limitKbps, encoderName } from '../lib/compress.js';
+import { limitKbps, encoderName, QUALITY, qualityLabel } from '../lib/compress.js';
 import { helperOutdated, MIN_HELPER } from '../lib/helper.js';
 
 const $ = (id) => document.getElementById(id);
@@ -47,8 +47,21 @@ async function save() {
     el.addEventListener(el.type === 'text' || el.type === 'number' ? 'input' : 'change', save);
   }
   refresh(s);
+  relabelQuality();
+  $('encoder').addEventListener('change', relabelQuality);
   checkHelper(true).then(detectEncoders);
 })();
+
+// Quality options show the exact value for the encoder that will actually run
+// (with Auto: the first working graphics-card encoder, else x265).
+let detected = null;
+function relabelQuality() {
+  const choice = $('encoder').value;
+  const enc = choice !== 'auto' ? choice : (['nvenc', 'qsv', 'amf'].find((k) => detected?.[k]) || 'x265');
+  for (const opt of $('quality').options) {
+    if (QUALITY.presets.includes(opt.value)) opt.textContent = qualityLabel(opt.value, enc);
+  }
+}
 
 // Which HEVC encoders work on this PC (the helper test-encodes once and caches it).
 async function detectEncoders(installed) {
@@ -62,6 +75,8 @@ async function detectEncoders(installed) {
     return;
   }
   const e = r.data || {};
+  detected = e;
+  relabelQuality();
   const gpus = ['nvenc', 'qsv', 'amf'].filter((k) => e[k]);
   out.textContent = `Detected on this PC: ${[...gpus.map(encoderName), e.x265 ? encoderName('x265') : null].filter(Boolean).join(' · ') || 'none'}. ` +
     `Auto uses ${gpus.length ? encoderName(gpus[0]) : 'x265 (CPU)'}.`;

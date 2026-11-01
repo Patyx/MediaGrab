@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MediaGrab",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Download videos, images and audio from Reddit, X, Instagram, TikTok and Facebook at the best available quality, with sound.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsHCBISMCgnOLA4ZgT73o6+/VFGlcQmTusWrpEhkzRQ3qPSQqybxzXHWPBC18HSn5pad+o41r8m7ggnznLZZz0lwAKp2OC/60bt0drl5zCT7oUPjWdSmBGcxtzy03z9f0znglKCvbrRw5vGpJ+E6reh4D71wIgRUTchYD+cMF5vUt7Lof9/yK9DEFBelurcDNmgThK4qU2h6bFjWYrxKfvNp5dOMRVaEPIr/Kr8Xm5V1v5awRPG9aa9JvR1nt41ndkTWkqINPFcXxXrvVJsEmYWw/3oX7LHh7K9kGd39uxjxrqYAFM9C+ua10S6HNgCdDODIEeVEEYss5Cipj84vBWQIDAQAB",
   "minimum_chrome_version": "116",

@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$Version = '1.5.1'
+$Version = '1.5.2'
 $null = Add-Type -AssemblyName System.Windows.Forms
 $null = Add-Type -AssemblyName System.Drawing
 
@@ -368,7 +368,7 @@ function Get-Probe([string]$path) {
   if (-not $ffprobe) { throw 'ffprobe not found. Run install.bat from the MediaGrab helper folder.' }
   $out = New-Object Collections.Generic.List[string]
   $r = Invoke-Tool $ffprobe @('-v', 'error', '-select_streams', 'v:0', '-show_entries',
-    'stream=codec_name,width,height,bit_rate:format=duration,size', '-of', 'json', $path) { param($l) $out.Add($l) }
+    'stream=codec_name,width,height,bit_rate,nb_frames,avg_frame_rate:format=duration,size', '-of', 'json', $path) { param($l) $out.Add($l) }
   if ($r.code -ne 0) { throw "ffprobe failed: $($r.err.Trim())" }
   $j = ($out -join "`n") | ConvertFrom-Json
   $s = @($j.streams)[0]
@@ -377,7 +377,18 @@ function Get-Probe([string]$path) {
   $size = [int64]$j.format.size
   $vbr = 0.0
   if ($s.bit_rate) { $vbr = [double]$s.bit_rate } elseif ($dur -gt 0) { $vbr = [math]::Max(0, $size * 8 / $dur - 128000) }
-  return @{ codec = [string]$s.codec_name; w = [int]$s.width; h = [int]$s.height; vkbps = [int][math]::Round($vbr / 1000); dur = $dur; size = $size }
+  # Total video frames (for progress): the container's count, else duration x frame rate.
+  $frames = [int64]0
+  $null = [int64]::TryParse([string]$s.nb_frames, [ref]$frames)
+  if ($frames -le 0 -and $dur -gt 0) {
+    $fr = ([string]$s.avg_frame_rate) -split '/'
+    $num = 0.0; $den = 1.0
+    if ($fr.Count -ge 1) { $null = [double]::TryParse($fr[0], [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$num) }
+    if ($fr.Count -ge 2) { $null = [double]::TryParse($fr[1], [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$den) }
+    if ($num -gt 0 -and $den -gt 0) { $frames = [int64]($dur * $num / $den) }
+  }
+  $audioBytes = [math]::Max(0, $size - $vbr / 8 * $dur)
+  return @{ codec = [string]$s.codec_name; w = [int]$s.width; h = [int]$s.height; vkbps = [int][math]::Round($vbr / 1000); dur = $dur; size = $size; frames = $frames; audioBytes = $audioBytes }
 }
 
 # Bitrate limit (kbps) for a resolution: a curve through the 720p and 1080p settings.
@@ -490,19 +501,27 @@ function Invoke-Compress($m) {
     $tmp = "$outPath.mg-hevc.mp4"
     # The compressed file is saved next to the original's name with "_comp" appended.
     $compPath = Get-UniquePath ([IO.Path]::Combine([IO.Path]::GetDirectoryName($outPath), [IO.Path]::GetFileNameWithoutExtension($outPath) + '_comp.mp4'))
-    $state = @{ last = -1; dur = $probe.dur; t = 0.0; bytes = 0.0; kbps = 0; orig = [double]$probe.size; min = [double]$m.minSavings; projected = 0.0 }
+    $state = @{ last = -1; dur = $probe.dur; frames = [double]$probe.frames; f = 0.0; t = 0.0; bytes = 0.0; kbps = 0
+      orig = [double]$probe.size; audio = [double]$probe.audioBytes; min = [double]$m.minSavings; projected = 0.0 }
     $onLine = {
       param($l)
+      if ($l -match '^frame=(\d+)') { $state.f = [double]$Matches[1]; return }
       if ($l -match '^out_time_(?:us|ms)=(\d+)') { $state.t = [double]$Matches[1] / 1e6; return }
       if ($l -match '^total_size=(\d+)') { $state.bytes = [double]$Matches[1]; return }
       if ($l -match '^bitrate=\s*([\d.]+)kbits') { $state.kbps = [int][double]$Matches[1]; return }
-      if ($l -notmatch '^progress=' -or $state.dur -le 0) { return }
-      $frac = [math]::Min(1, $state.t / $state.dur)
+      if ($l -notmatch '^progress=') { return }
+      # Progress = encoded video frames / total. (out_time follows the copied audio, which
+      # races ahead of the video encoder, so it is only a fallback.)
+      if ($state.frames -gt 0) { $frac = [math]::Min(1, $state.f / $state.frames) }
+      elseif ($state.dur -gt 0) { $frac = [math]::Min(1, $state.t / $state.dur) }
+      else { return }
       $pct = [int][math]::Min(99, $frac * 100)
       if ($pct -ne $state.last) { $state.last = $pct; Send @{ rid = $m.rid; event = 'progress'; pct = $pct; kbps = $state.kbps } }
-      # From 20% on, project the final size; stop early if it won't save enough.
+      # From 20% on, project the final size (audio is copied as-is, video scales with
+      # progress); stop early if it won't save enough.
       if ($frac -ge 0.2 -and $state.bytes -gt 0) {
-        $state.projected = $state.bytes / $frac
+        $audioDone = $state.audio * $(if ($state.dur -gt 0) { [math]::Min(1, $state.t / $state.dur) } else { $frac })
+        $state.projected = $state.audio + [math]::Max(0, $state.bytes - $audioDone) / $frac
         if ($state.projected -gt $state.orig * (1 - $state.min / 100)) { return 'abort' }
       }
     }
