@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$Version = '1.6.0'
+$Version = '1.7.0'
 $null = Add-Type -AssemblyName System.Windows.Forms
 $null = Add-Type -AssemblyName System.Drawing
 
@@ -677,8 +677,21 @@ function Invoke-Compress($m) {
       return
     }
     Move-Item -LiteralPath $tmp -Destination $compPath -Force
-    Remove-Item -LiteralPath $in -Force -ErrorAction SilentlyContinue
-    Send ($base + @{ path = $compPath; size = $newSize; outcome = 'compressed'; savedPct = $saved; encoder = $choice })
+    # What happens to the original: deleted (downloads), or for library compression
+    # sent to the Recycle Bin / kept.
+    $origNote = $null
+    switch ([string]$m.onOriginal) {
+      'keep' { $origNote = 'kept' }
+      'recycle' {
+        try {
+          $null = Add-Type -AssemblyName Microsoft.VisualBasic
+          [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($in, [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs, [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)
+          $origNote = 'recycled'
+        } catch { $origNote = 'kept (Recycle Bin unavailable)' }
+      }
+      default { Remove-Item -LiteralPath $in -Force -ErrorAction SilentlyContinue; $origNote = 'deleted' }
+    }
+    Send ($base + @{ path = $compPath; size = $newSize; outcome = 'compressed'; savedPct = $saved; encoder = $choice; original = $origNote })
   } catch {
     # Never lose the download: put the original where the user asked for it.
     if ((Test-Path -LiteralPath $in) -and -not (Test-Path -LiteralPath $outPath)) { Move-Result $in $outPath }
@@ -689,6 +702,9 @@ function Invoke-Compress($m) {
 }
 
 # ------------------------------------------------------------------ main loop
+
+# Loaded as a library (by the Library Scanner): stop here, keep the functions.
+if ($env:MEDIAGRAB_LIB) { return }
 
 function Invoke-HostCommand($m) {
   switch ([string]$m.cmd) {

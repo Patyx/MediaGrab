@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MediaGrab Library Scanner</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #111827; --muted: #6b7280; --line: #e5e7eb; --card: #f9fafb;
+  --accent: #c93f0b; --accent-hover: #b03507; --accent-fg: #ffffff; --blue: #2563eb;
+  --ok: #15803d; --warn: #b45309; --err: #dc2626; --row-hover: #f3f4f6;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111318; --fg: #e5e7eb; --muted: #9ca3af; --line: #262a33; --card: #181b22;
+    --accent: #d9480f; --accent-hover: #ea580c; --blue: #3b82f6;
+    --ok: #4ade80; --warn: #fbbf24; --err: #f87171; --row-hover: #1d2129;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 16px; padding: 10px 20px; background: var(--bg); border-bottom: 1px solid var(--line); }
+h1 { margin: 0; font-size: 16px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+h1 .logo { width: 22px; height: 22px; border-radius: 6px; background: #ff5a1f; display: grid; place-items: center; color: #fff; font-size: 14px; }
+nav { display: flex; gap: 4px; }
+nav button { border: 0; background: none; color: var(--muted); padding: 7px 12px; border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
+nav button[aria-selected="true"] { color: var(--fg); background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.spacer { flex: 1; }
+#busyPill { font-size: 12px; color: var(--muted); }
+main { padding: 16px 20px 40px; max-width: 1500px; margin: 0 auto; }
+section.tab[hidden] { display: none; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
+label { display: block; margin: 8px 0; }
+input[type=text], input[type=number], select {
+  font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px;
+}
+input[type=number] { width: 110px; }
+label.check { display: flex; gap: 8px; align-items: center; }
+button.btn { font: inherit; font-weight: 600; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+button.btn:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+button.primary:hover { background: var(--accent-hover); }
+button.danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, transparent); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; min-width: 260px; }
+#folder { width: 100%; }
+.muted { color: var(--muted); }
+.note { color: var(--muted); font-size: 13px; }
+.bar { position: relative; height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; margin: 10px 0 6px; }
+.bar i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--blue); transition: width .3s; }
+.bar.compress i { background: var(--accent); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.stat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; }
+.stat b { display: block; font-size: 20px; }
+.stat span { font-size: 12px; color: var(--muted); }
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.toolbar input[type=text] { width: 220px; }
+.table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+th { position: sticky; top: 0; background: var(--card); font-weight: 600; cursor: pointer; user-select: none; z-index: 1; }
+th.sorted::after { content: ' ▾'; color: var(--accent); }
+th.sorted.asc::after { content: ' ▴'; }
+th.nosort { cursor: default; }
+td.l, th.l { text-align: left; }
+td.file { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+td.file small { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+tr:hover td { background: var(--row-hover); }
+tr.dim td { color: var(--muted); }
+.good { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--err); }
+.pill { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--line); }
+.pill.ok { color: var(--ok); } .pill.warn { color: var(--warn); } .pill.bad { color: var(--err); } .pill.done { color: var(--accent); }
+.iconbtn { border: 1px solid var(--line); background: var(--bg); border-radius: 6px; cursor: pointer; padding: 1px 6px; }
+.selbar { position: sticky; bottom: 0; display: flex; gap: 12px; align-items: center; padding: 10px 14px; margin-top: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; }
+.speeds td, .speeds th { text-align: left; cursor: default; position: static; }
+#saved { color: var(--ok); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="logo">⬇</span>MediaGrab Library Scanner</h1>
+  <nav role="tablist">
+    <button role="tab" data-tab="scan" aria-selected="true">Scan</button>
+    <button role="tab" data-tab="results" aria-selected="false">Results</button>
+    <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+  </nav>
+  <span class="spacer"></span>
+  <span id="busyPill"></span>
+  <button class="btn" id="quit" title="Stop the scanner (it also stops by itself shortly after you close this tab)">Quit</button>
+</header>
+<main>
+
+<!-- ============================================================ Scan -->
+<section class="tab" id="tab-scan">
+  <div class="card">
+    <h2>Folder</h2>
+    <div class="row">
+      <div class="grow"><input type="text" id="folder" placeholder="D:\Videos" spellcheck="false"></div>
+      <button class="btn" id="browse">Browse…</button>
+    </div>
+    <label class="check"><input type="checkbox" id="recurse"> Include subfolders</label>
+    <p class="note">Videos: <span id="extInfo"></span>, at least <span id="minInfo"></span> MB. Change in Settings.</p>
+    <div class="row">
+      <button class="btn" id="estimate">Estimate job</button>
+      <button class="btn primary" id="start">Start scan</button>
+      <button class="btn danger" id="cancel" hidden>Cancel</button>
+    </div>
+    <p id="estimateOut" class="note"></p>
+  </div>
+  <div class="card" id="progressCard" hidden>
+    <h2 id="progTitle">Progress</h2>
+    <div id="progText"></div>
+    <div class="bar" id="progBar"><i></i></div>
+    <div class="note" id="progSub"></div>
+  </div>
+  <div class="card">
+    <h2>How it works</h2>
+    <p class="note">For every video: read resolution, codec and bitrate; skip files already efficiently encoded; pick 3–5 six-second windows across the video by its bitrate (calm and busy parts); encode them with your real HEVC settings; optionally score them with VMAF; and predict the compressed size. Results are cached, so rescans only analyse new or changed files. Encode time is estimated from your speed table (Settings).</p>
+  </div>
+</section>
+
+<!-- ============================================================ Results -->
+<section class="tab" id="tab-results" hidden>
+  <div class="stats" id="stats"></div>
+  <div class="toolbar">
+    <label class="row" style="margin:0">Sort by
+      <select id="sortKey">
+        <option value="gbph">GB saved per hour of encoding</option>
+        <option value="savedGB">GB saved</option>
+        <option value="savedPct">% saved</option>
+        <option value="size">File size</option>
+        <option value="predicted">Predicted size</option>
+        <option value="vkbps">Video bitrate</option>
+        <option value="bpp">Bits per pixel</option>
+        <option value="vmaf">VMAF</option>
+        <option value="encSec">Encode time</option>
+        <option value="dur">Duration</option>
+        <option value="spread">Confidence (spread)</option>
+        <option value="name">Name</option>
+      </select>
+    </label>
+    <button class="btn" id="sortDir" title="Toggle direction">Descending</button>
+    <input type="text" id="search" placeholder="Filter by name or folder">
+    <label class="check" style="margin:0"><input type="checkbox" id="hideDone" checked> Hide files not worth compressing</label>
+    <label class="row" style="margin:0">Select top <input type="number" id="topN" value="20" min="1" style="width:70px"></label>
+    <button class="btn" id="selectTop">Select</button>
+    <button class="btn" id="selectNone">Clear</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr id="thead"></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+  <p class="note" id="emptyNote"></p>
+  <div class="selbar">
+    <span id="selInfo">Nothing selected</span>
+    <span class="spacer"></span>
+    <button class="btn primary" id="compressSel" disabled>Compress selected</button>
+  </div>
+</section>
+
+<!-- ============================================================ Settings -->
+<section class="tab" id="tab-settings" hidden>
+  <p class="note">Settings save automatically <span id="saved" hidden>· Saved</span>. Analysis and compression settings change the prediction: results made with other settings are marked “outdated” until you scan again. Encode speed applies instantly.</p>
+  <div class="grid2">
+    <div class="card">
+      <h2>Files</h2>
+      <label>Extensions <input type="text" data-k="extensions" style="width:100%"></label>
+      <label>Minimum size (MB) <input type="number" data-k="minSizeMB" min="0" step="10"></label>
+      <label>Exclude folders (names or full paths, comma-separated) <input type="text" data-k="exclude" style="width:100%"></label>
+      <label class="check"><input type="checkbox" data-k="skipComp"> Skip files already ending in “_comp”</label>
+    </div>
+    <div class="card">
+      <h2>Analysis</h2>
+      <label>Samples for videos shorter than <input type="number" data-k="longMinutes" min="1" style="width:70px"> min
+        <input type="number" data-k="samplesShort" min="1" max="12" style="width:70px">, longer <input type="number" data-k="samplesLong" min="1" max="12" style="width:70px"></label>
+      <label>Sample length (seconds) <input type="number" data-k="sampleSeconds" min="2" max="30"></label>
+      <label class="check"><input type="checkbox" data-k="vmaf"> Measure quality with VMAF (slower)</label>
+      <label>VMAF: score every n-th frame <input type="number" data-k="vmafSubsample" min="1" max="30"></label>
+      <label class="check"><input type="checkbox" data-k="skipEfficient"> Skip HEVC / AV1 / VP9 files below <input type="number" data-k="efficientBpp" min="0" step="0.01" style="width:80px"> bits per pixel</label>
+    </div>
+    <div class="card">
+      <h2>Compression</h2>
+      <label>Encoder
+        <select data-k="encoder">
+          <option value="auto">Auto: graphics card if available, else CPU</option>
+          <option value="nvenc">NVIDIA NVENC</option>
+          <option value="qsv">Intel Quick Sync</option>
+          <option value="amf">AMD AMF</option>
+          <option value="x265">CPU (x265)</option>
+        </select>
+      </label>
+      <p class="note" id="encInfo"></p>
+      <label>Quality <select data-k="quality" id="quality"></select></label>
+      <label>CPU encoder speed
+        <select data-k="x265Preset"><option value="medium">Medium</option><option value="slow">Slow</option><option value="slower">Slower</option></select>
+      </label>
+      <label>Bitrate cap at 720p / 1080p / 4K (kbps)
+        <span class="row"><input type="number" data-k="limit720" step="100"><input type="number" data-k="limit1080" step="100"><input type="number" data-k="limit2160" step="100"></span>
+      </label>
+      <label class="check"><input type="checkbox" data-k="audioCompress"> Re-encode audio above <input type="number" data-k="audioLimit" style="width:80px"> kbps to AAC <input type="number" data-k="audioTarget" style="width:80px"> kbps</label>
+      <label>Keep the original if compression saves less than (%) <input type="number" data-k="minSavings" min="0" max="90"></label>
+      <label>After compressing, the original
+        <select data-k="original"><option value="recycle">goes to the Recycle Bin</option><option value="keep">is kept</option><option value="delete">is deleted permanently</option></select>
+      </label>
+    </div>
+    <div class="card">
+      <h2>Encode speed (frames per second)</h2>
+      <p class="note">Used for the encode-time estimate and the GB-per-hour ranking. Defaults are estimates for an RTX 5070 with HEVC NVENC at its slowest, most efficient preset (p7, full-resolution multipass, lookahead). Replace them with what the sample encodes measured on your PC once a scan has run.</p>
+      <table class="speeds">
+        <thead><tr><th>Resolution</th><th>Your setting</th><th>Measured (median)</th></tr></thead>
+        <tbody id="speedRows"></tbody>
+      </table>
+      <p><button class="btn" id="useMeasured">Use measured speeds</button> <span class="note" id="measuredNote"></span></p>
+    </div>
+  </div>
+</section>
+</main>
+
+<script>
+'use strict';
+const TOKEN = new URLSearchParams(location.search).get('t');
+const $ = (id) => document.getElementById(id);
+const api = async (path, body) => {
+  const r = await fetch('/api/' + path, {
+    method: body ? 'POST' : 'GET',
+    headers: { 'X-Token': TOKEN, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+};
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+// ---------------------------------------------------------------- formatting
+const fmtSize = (n) => (n >= 1e12 ? `${(n / 1e12).toFixed(2)} TB` : n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.round(n / 1e3)} KB`);
+const fmtRate = (k) => (k >= 1000 ? `${(k / 1000).toFixed(1)} Mbps` : `${Math.round(k)} kbps`);
+const fmtDur = (s) => {
+  if (!s || s < 0) return '–';
+  s = Math.round(s);
+  if (s < 60) return `${s}s`;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m ${String(s % 60).padStart(2, '0')}s`;
+};
+
+// Quality steps (x265 CRF 20..32; GPU values interpolated) — mirrors the helper.
+const ANCHORS = [20, 22, 24, 27, 29, 32];
+const QV = { x265: [20, 22, 24, 27, 29, 32], nvenc: [22, 24, 27, 30, 32, 35], qsv: [20, 22, 25, 28, 30, 33], amf: [20, 22, 25, 28, 30, 33] };
+const QSCALE = { x265: 'CRF', nvenc: 'CQ', qsv: 'quality', amf: 'QP' };
+const QNAMES = { 20: 'Maximum: near-lossless', 22: 'High', 24: 'Balanced', 27: 'Smaller files', 29: 'Much smaller', 32: 'Tiny: visible softening' };
+const ENC = { x265: 'x265 (CPU)', nvenc: 'NVIDIA NVENC', qsv: 'Intel Quick Sync', amf: 'AMD AMF' };
+const OLDQ = { max: 20, high: 22, balanced: 24, small: 27, smaller: 29, tiny: 32 };
+const normQ = (q) => OLDQ[q] ?? (Number(q) >= 20 && Number(q) <= 32 ? Math.round(Number(q)) : 24);
+function qValue(level, enc) {
+  const x = normQ(level), t = QV[enc] || QV.x265;
+  for (let i = 0; i < 5; i++) if (x <= ANCHORS[i + 1]) return Math.round(t[i] + ((t[i + 1] - t[i]) * (x - ANCHORS[i])) / (ANCHORS[i + 1] - ANCHORS[i]));
+  return t[5];
+}
+
+// ---------------------------------------------------------------- state
+let settings = {};
+let encoders = null;
+let version = -1;
+const results = new Map(); // path -> result
+const selected = new Set();
+let sortKey = 'gbph', sortDesc = true;
+let busyNow = false;
+
+const BUCKETS = [480, 720, 1080, 1440, 2160];
+const BUCKET_NAMES = { 480: '480p and below', 720: '720p', 1080: '1080p', 1440: '1440p', 2160: '4K' };
+
+// Derived numbers; encode time uses the current speed table, so it updates instantly.
+function metrics(r) {
+  const fps = Number(settings['fps' + r.bucket]) || 0;
+  const encSec = fps > 0 && r.frames ? r.frames / fps : 0;
+  const saved = r.status === 'ok' ? r.saved || 0 : 0;
+  const savedGB = saved / 1e9;
+  return {
+    encSec, savedGB,
+    savedPct: r.size ? (saved / r.size) * 100 : 0,
+    gbph: encSec > 0 ? savedGB / (encSec / 3600) : 0,
+    size: r.size || 0, predicted: r.predicted || r.size || 0, vkbps: r.vkbps || 0, bpp: r.bpp || 0,
+    vmaf: r.vmaf ?? -1, dur: r.dur || 0, spread: r.spread ?? 9, name: (r.name || '').toLowerCase(),
+  };
+}
+const worth = (r) => r.status === 'ok' && (r.saved || 0) > 0;
+
+// ---------------------------------------------------------------- tabs
+for (const b of document.querySelectorAll('nav button')) {
+  b.onclick = () => {
+    for (const x of document.querySelectorAll('nav button')) x.setAttribute('aria-selected', String(x === b));
+    for (const t of document.querySelectorAll('section.tab')) t.hidden = t.id !== 'tab-' + b.dataset.tab;
+    if (b.dataset.tab === 'results') renderResults();
+    if (b.dataset.tab === 'settings') renderSpeeds();
+  };
+}
+const showTab = (name) => document.querySelector(`nav button[data-tab="${name}"]`).click();
+
+// ---------------------------------------------------------------- scan tab
+$('browse').onclick = async () => {
+  const r = await api('browse', {}).catch((e) => ({ error: e.message }));
+  if (r.path) $('folder').value = r.path;
+};
+$('estimate').onclick = async () => {
+  const out = $('estimateOut');
+  out.textContent = 'Counting videos…';
+  try {
+    const r = await api('estimate', { folder: $('folder').value.trim(), recurse: $('recurse').checked });
+    out.textContent = `${r.files} videos (${fmtSize(r.bytes)}). ${r.toAnalyse} need analysis → about ${fmtDur(r.seconds)} ` +
+      `(${r.secondsPerFile}s per file, ${r.measured ? 'from your previous scans' : 'rough estimate until the first scan'}). ` +
+      `${r.files - r.toAnalyse} are already up to date.`;
+  } catch (e) { out.textContent = `Couldn't estimate: ${e.message}`; }
+};
+$('start').onclick = async () => {
+  try {
+    await api('scan', { folder: $('folder').value.trim(), recurse: $('recurse').checked });
+    poll();
+  } catch (e) { $('estimateOut').textContent = `Couldn't start: ${e.message}`; }
+};
+$('cancel').onclick = () => api('cancel', {}).catch(() => {});
+$('quit').onclick = async () => { await api('quit', {}).catch(() => {}); document.body.innerHTML = '<main><p class="muted">Scanner stopped. You can close this tab.</p></main>'; };
+
+function renderProgress(st, busy) {
+  const card = $('progressCard');
+  const phase = st.phase || 'idle';
+  card.hidden = phase === 'idle';
+  $('cancel').hidden = !busy;
+  $('start').disabled = busy;
+  $('compressSel').disabled = busy || !selected.size;
+  $('busyPill').textContent = busy ? (phase === 'compressing' ? `Compressing ${st.i}/${st.n}…` : `Scanning ${st.i}/${st.n}…`) : '';
+  const bar = $('progBar');
+  bar.classList.toggle('compress', phase === 'compressing');
+  let pct = 0;
+  if (phase === 'scanning') pct = st.n ? ((st.i - 1) / st.n) * 100 : 0;
+  else if (phase === 'compressing') pct = st.n ? ((st.i - 1 + (st.pct || 0) / 100) / st.n) * 100 : 0;
+  else if (phase === 'done') pct = 100;
+  bar.firstElementChild.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+  const titles = { listing: 'Finding videos', scanning: 'Analysing', compressing: 'Compressing', done: 'Finished', cancelled: 'Cancelled', error: 'Error' };
+  $('progTitle').textContent = titles[phase] || phase;
+  if (phase === 'scanning') {
+    $('progText').textContent = `${st.i} of ${st.n}: ${st.file || ''}`;
+    $('progSub').textContent = `${st.step || ''}${st.eta ? ` · about ${fmtDur(st.eta)} left` : ''}`;
+  } else if (phase === 'compressing') {
+    $('progText').textContent = `${st.i} of ${st.n}: ${st.file || ''}`;
+    $('progSub').textContent = `${st.pct >= 99 ? 'Finishing…' : `${st.pct || 0}%`}${st.kbps ? ` · ${fmtRate(st.kbps)}` : ''}`;
+  } else {
+    $('progText').textContent = st.message || '';
+    $('progSub').textContent = '';
+  }
+}
+
+// ---------------------------------------------------------------- results tab
+const COLS = [
+  { k: 'sel', label: '', nosort: true },
+  { k: 'name', label: 'File', l: true },
+  { k: 'res', label: 'Res', nosort: true },
+  { k: 'codec', label: 'Codec', nosort: true, l: true },
+  { k: 'size', label: 'Size' },
+  { k: 'vkbps', label: 'Bitrate' },
+  { k: 'bpp', label: 'Bits/px' },
+  { k: 'predicted', label: 'Predicted' },
+  { k: 'savedGB', label: 'Saved' },
+  { k: 'savedPct', label: '%' },
+  { k: 'vmaf', label: 'VMAF' },
+  { k: 'encSec', label: 'Encode' },
+  { k: 'gbph', label: 'GB/h' },
+  { k: 'spread', label: 'Status', l: true },
+  { k: 'open', label: '', nosort: true },
+];
+function renderHead() {
+  const tr = $('thead');
+  tr.replaceChildren();
+  for (const c of COLS) {
+    const th = el('th', `${c.l ? 'l' : ''} ${c.nosort ? 'nosort' : ''} ${sortKey === c.k ? 'sorted' : ''} ${sortKey === c.k && !sortDesc ? 'asc' : ''}`, c.label);
+    if (c.k === 'sel') {
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.title = 'Select all shown';
+      cb.onchange = () => { for (const r of visibleRows()) if (worth(r)) cb.checked ? selected.add(r.path) : selected.delete(r.path); renderResults(); };
+      th.append(cb);
+    } else if (!c.nosort) {
+      th.onclick = () => { if (sortKey === c.k) sortDesc = !sortDesc; else { sortKey = c.k; sortDesc = c.k !== 'name' && c.k !== 'spread'; } $('sortKey').value = sortKey; syncDir(); renderResults(); };
+    }
+    tr.append(th);
+  }
+}
+function syncDir() { $('sortDir').textContent = sortDesc ? 'Descending' : 'Ascending'; }
+$('sortKey').onchange = () => { sortKey = $('sortKey').value; sortDesc = sortKey !== 'name' && sortKey !== 'spread'; syncDir(); renderResults(); };
+$('sortDir').onclick = () => { sortDesc = !sortDesc; syncDir(); renderResults(); };
+$('search').oninput = () => renderResults();
+$('hideDone').onchange = () => renderResults();
+$('selectNone').onclick = () => { selected.clear(); renderResults(); };
+$('selectTop').onclick = () => {
+  selected.clear();
+  const n = Math.max(1, Number($('topN').value) || 20);
+  for (const r of visibleRows().filter(worth).slice(0, n)) selected.add(r.path);
+  renderResults();
+};
+
+function inFolder(r) {
+  const f = ($('folder').value || settings.folder || '').trim().toLowerCase().replace(/[\\/]+$/, '');
+  return !f || (r.path || '').toLowerCase().startsWith(f + '\\') || (r.path || '').toLowerCase().startsWith(f + '/');
+}
+function visibleRows() {
+  const q = $('search').value.trim().toLowerCase();
+  const hide = $('hideDone').checked;
+  const rows = [...results.values()].filter((r) => inFolder(r) && (!q || (r.path || '').toLowerCase().includes(q)) && (!hide || worth(r)));
+  const key = sortKey;
+  rows.sort((a, b) => {
+    const x = metrics(a)[key], y = metrics(b)[key];
+    const c = typeof x === 'string' ? x.localeCompare(y) : x - y;
+    return sortDesc ? -c : c;
+  });
+  return rows;
+}
+
+function statusCell(r) {
+  const td = el('td', 'l');
+  let pill;
+  if (r.status === 'compressed') pill = el('span', 'pill done', `compressed ${r.actualSavedPct != null ? `-${r.actualSavedPct}%` : ''}`);
+  else if (r.outcome && r.outcome !== 'compressed') pill = el('span', 'pill warn', r.outcome === 'cancelled' ? 'compression cancelled' : r.outcome === 'failed' ? 'compression failed' : 'kept original');
+  else if (r.status === 'efficient') pill = el('span', 'pill', 'already efficient');
+  else if (r.status === 'no-gain') pill = el('span', 'pill', 'no gain');
+  else if (r.status === 'error') pill = el('span', 'pill bad', 'error');
+  else if (r.stale) pill = el('span', 'pill warn', 'outdated');
+  else pill = el('span', `pill ${r.spread > 0.35 ? 'warn' : 'ok'}`, r.spread > 0.35 ? 'uncertain' : 'confident');
+  td.append(pill);
+  td.title = [r.note, r.error, r.spread != null ? `sample ratios ${(r.ratios || []).join(', ')}` : '', r.reAudio ? `audio ${r.akbps} → ${settings.audioTarget} kbps` : ''].filter(Boolean).join('\n');
+  return td;
+}
+
+function renderResults() {
+  renderHead();
+  const rows = visibleRows();
+  const body = $('tbody');
+  const frag = document.createDocumentFragment();
+  for (const r of rows) {
+    const m = metrics(r);
+    const tr = el('tr', worth(r) ? '' : 'dim');
+    const tdSel = el('td');
+    const cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = selected.has(r.path);
+    cb.disabled = !worth(r);
+    cb.onchange = () => { cb.checked ? selected.add(r.path) : selected.delete(r.path); renderSelection(); };
+    tdSel.append(cb);
+    const tdFile = el('td', 'l file');
+    tdFile.append(el('span', '', r.name), el('small', '', r.dir || ''));
+    tdFile.title = r.path;
+    const ok = r.status === 'ok';
+    tr.append(
+      tdSel, tdFile,
+      el('td', '', r.short ? `${r.short}p` : '–'),
+      el('td', 'l', r.codec || '–'),
+      el('td', '', fmtSize(r.size || 0)),
+      el('td', '', r.vkbps ? fmtRate(r.vkbps) : '–'),
+      el('td', '', r.bpp != null ? r.bpp.toFixed(3) : '–'),
+      el('td', '', ok ? fmtSize(m.predicted) : '–'),
+      el('td', ok && m.savedGB > 0 ? 'good' : '', ok ? fmtSize(m.savedGB * 1e9) : '–'),
+      el('td', '', ok ? `${m.savedPct.toFixed(0)}%` : '–'),
+      el('td', r.vmaf != null ? (r.vmaf >= 95 ? 'good' : r.vmaf >= 90 ? '' : 'warn') : '', r.vmaf != null ? r.vmaf.toFixed(1) : '–'),
+      el('td', '', ok ? fmtDur(m.encSec) : '–'),
+      el('td', '', ok && m.gbph > 0 ? m.gbph.toFixed(2) : '–'),
+      statusCell(r),
+    );
+    const tdOpen = el('td');
+    const ob = el('button', 'iconbtn', '📁');
+    ob.title = 'Show in folder';
+    ob.onclick = () => api('open', { path: r.outPath || r.path }).catch(() => {});
+    tdOpen.append(ob);
+    tr.append(tdOpen);
+    frag.append(tr);
+  }
+  body.replaceChildren(frag);
+  $('emptyNote').textContent = rows.length ? '' : results.size ? 'Nothing to show with the current filter.' : 'No results yet: scan a folder on the Scan tab.';
+  renderStats();
+  renderSelection();
+}
+
+function renderStats() {
+  const all = [...results.values()].filter(inFolder);
+  const gain = all.filter(worth);
+  const sum = (arr, f) => arr.reduce((a, r) => a + f(r), 0);
+  const saved = sum(gain, (r) => r.saved || 0);
+  const enc = sum(gain, (r) => metrics(r).encSec);
+  const best = gain.reduce((a, r) => Math.max(a, metrics(r).gbph), 0);
+  const stats = [
+    [all.length, 'videos analysed'],
+    [fmtSize(sum(all, (r) => r.size || 0)), 'library size'],
+    [fmtSize(saved), `potential saving (${gain.length} videos)`],
+    [fmtDur(enc), 'to compress all of them'],
+    [best ? best.toFixed(1) : '–', 'best GB saved per hour'],
+  ];
+  $('stats').replaceChildren(...stats.map(([b, s]) => { const d = el('div', 'stat'); d.append(el('b', '', String(b)), el('span', '', s)); return d; }));
+}
+
+function renderSelection() {
+  const rows = [...selected].map((p) => results.get(p)).filter(Boolean);
+  const saved = rows.reduce((a, r) => a + (r.saved || 0), 0);
+  const enc = rows.reduce((a, r) => a + metrics(r).encSec, 0);
+  $('selInfo').textContent = rows.length ? `${rows.length} selected · saves about ${fmtSize(saved)} · about ${fmtDur(enc)} of encoding` : 'Nothing selected';
+  $('compressSel').disabled = !rows.length || busyNow;
+}
+$('compressSel').onclick = async () => {
+  const paths = [...selected];
+  if (!paths.length) return;
+  const what = { recycle: 'go to the Recycle Bin', keep: 'be kept', delete: 'be DELETED permanently' }[settings.original] || 'be removed';
+  if (!confirm(`Compress ${paths.length} video(s)? Each result is saved as "name_comp.mp4" next to the original, and the original will ${what} (unless compression saves less than ${settings.minSavings}%).`)) return;
+  try { await api('compress', { paths }); selected.clear(); showTab('scan'); poll(); } catch (e) { alert(e.message); }
+};
+
+// ---------------------------------------------------------------- settings tab
+const qualitySel = $('quality');
+for (let l = 20; l <= 32; l++) qualitySel.append(new Option(String(l), String(l)));
+function effectiveEncoder() {
+  const c = settings.encoder;
+  if (c && c !== 'auto') return c;
+  return ['nvenc', 'qsv', 'amf'].find((k) => encoders?.[k]) || 'x265';
+}
+function relabelQuality() {
+  const enc = effectiveEncoder();
+  for (const o of qualitySel.options) {
+    const v = `${ENC[enc]} ${QSCALE[enc]} ${qValue(o.value, enc)}`;
+    o.textContent = QNAMES[o.value] ? `${QNAMES[o.value]} (${v})` : `   ${v}`;
+  }
+  const det = encoders ? ['nvenc', 'qsv', 'amf'].filter((k) => encoders[k]).map((k) => ENC[k]) : null;
+  $('encInfo').textContent = det == null ? 'Encoders are detected during the first scan.' : `Detected: ${[...det, 'x265 (CPU)'].join(' · ')}. Using ${ENC[enc]}.`;
+}
+function fillSettings() {
+  for (const inp of document.querySelectorAll('[data-k]')) {
+    const v = settings[inp.dataset.k];
+    if (inp.type === 'checkbox') inp.checked = !!v;
+    else inp.value = inp.dataset.k === 'quality' ? String(normQ(v)) : v ?? '';
+  }
+  $('extInfo').textContent = settings.extensions;
+  $('minInfo').textContent = settings.minSizeMB;
+  relabelQuality();
+}
+let saveTimer;
+for (const inp of document.querySelectorAll('[data-k]')) {
+  inp.addEventListener(inp.type === 'checkbox' || inp.tagName === 'SELECT' ? 'change' : 'input', () => {
+    const k = inp.dataset.k;
+    settings[k] = inp.type === 'checkbox' ? inp.checked : inp.type === 'number' ? Number(inp.value) : inp.value;
+    relabelQuality();
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveSettings, 400);
+    if (/^fps/.test(k)) renderResults();
+  });
+}
+async function saveSettings(extra = {}) {
+  Object.assign(settings, extra);
+  const r = await api('settings', settings).catch(() => null);
+  if (r?.settings) { settings = r.settings; fillSettings(); version = -1; poll(); }
+  $('saved').hidden = false;
+  setTimeout(() => { $('saved').hidden = true; }, 1200);
+}
+
+function measuredSpeeds() {
+  const by = {};
+  for (const r of results.values()) if (r.measuredFps > 0 && r.bucket) (by[r.bucket] ||= []).push(r.measuredFps);
+  const med = {};
+  for (const [b, arr] of Object.entries(by)) { arr.sort((a, c) => a - c); med[b] = { fps: arr[Math.floor(arr.length / 2)], n: arr.length }; }
+  return med;
+}
+function renderSpeeds() {
+  const med = measuredSpeeds();
+  const body = $('speedRows');
+  body.replaceChildren();
+  for (const b of BUCKETS) {
+    const tr = el('tr');
+    const inp = el('input');
+    inp.type = 'number'; inp.min = '1'; inp.value = settings['fps' + b];
+    inp.oninput = () => { settings['fps' + b] = Number(inp.value); clearTimeout(saveTimer); saveTimer = setTimeout(saveSettings, 400); };
+    const tdIn = el('td'); tdIn.append(inp);
+    tr.append(el('td', '', BUCKET_NAMES[b]), tdIn, el('td', 'muted', med[b] ? `${Math.round(med[b].fps)} fps (${med[b].n} files)` : '–'));
+    body.append(tr);
+  }
+  $('measuredNote').textContent = Object.keys(med).length ? '' : 'No measurements yet (run a scan first).';
+}
+$('useMeasured').onclick = () => {
+  const med = measuredSpeeds();
+  const upd = {};
+  for (const b of BUCKETS) if (med[b]) upd['fps' + b] = Math.round(med[b].fps);
+  if (Object.keys(upd).length) saveSettings(upd).then(renderSpeeds);
+};
+
+// ---------------------------------------------------------------- polling
+let firstState = true;
+async function poll() {
+  try {
+    const st = await api('state');
+    busyNow = st.busy;
+    encoders = st.encoders || encoders;
+    if (firstState) {
+      settings = st.settings;
+      fillSettings();
+      $('folder').value = settings.folder || '';
+      $('recurse').checked = settings.recurse !== false;
+      firstState = false;
+    }
+    renderProgress(st.status || {}, st.busy);
+    if (st.version !== version) {
+      const r = await api(`results?since=${version < 0 ? 0 : version}`);
+      if (r.full) results.clear();
+      for (const x of r.results || []) results.set(x.path, x);
+      version = r.version;
+      if (!$('tab-results').hidden) renderResults(); else renderStats();
+    }
+  } catch { /* scanner stopped */ }
+}
+syncDir();
+renderHead();
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>
