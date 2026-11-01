@@ -10,7 +10,7 @@ const send = (msg) => chrome.runtime.sendMessage({ to: 'sw', ...msg }).catch(() 
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.to !== 'offscreen') return;
-  if (msg.type === 'MG_JOB') runJob(msg.jobId, msg.item, msg.prefs || {}, msg.mode, msg.name);
+  if (msg.type === 'MG_JOB') runJob(msg.jobId, msg.item, msg.prefs || {}, msg.mode, msg.name, msg.compress);
   else if (msg.type === 'MG_REVOKE') URL.revokeObjectURL(msg.url);
   sendResponse({ ok: true });
 });
@@ -20,8 +20,8 @@ const EXT = {
   'image/webp': 'webp', 'image/gif': 'gif', 'image/heic': 'heic', 'image/avif': 'avif',
 };
 
-async function runJob(jobId, item, prefs, mode, name) {
-  const ids = { jobId, key: item.key, mode, name };
+async function runJob(jobId, item, prefs, mode, name, compress = null) {
+  const ids = { jobId, key: item.key, mode, name, compress };
   try {
     const plan = await resolve(item.source, prefs);
     const progress = makeProgress(ids, plan.video && plan.audio && mode !== 'audio' ? 2 : 1);

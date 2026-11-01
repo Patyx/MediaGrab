@@ -1,7 +1,7 @@
 // Service worker: context menu, job queue, chrome.downloads, and the bridge between
 // popup, content scripts, the offscreen document and the optional Windows helper.
 import { getSettings as loadSettings, buildName, cleanFolder } from './lib/settings.js';
-import { helperStatus, helperSave, ytdlpDownload, ytdlpUpdate, ytdlpProbe, cookiesFor, helperOpenFolder, helperOpenFile, helperCompress, helperEncoders } from './lib/helper.js';
+import { helperOutdated, helperStatus, helperSave, ytdlpDownload, ytdlpUpdate, ytdlpProbe, cookiesFor, helperOpenFolder, helperOpenFile, helperCompress, helperEncoders } from './lib/helper.js';
 import { fmtSize, fmtRate, encoderName } from './lib/compress.js';
 
 // Settings are read on every job; cache them until they change.
@@ -167,6 +167,7 @@ function upsert(m) {
     j = { jobId: m.jobId, key: m.key, name: m.name, mode: m.mode, state: 'queued', pct: 0, at: Date.now() };
     jobs.set(m.jobId, j);
   }
+  if (m.compress && !j.compress) j.compress = m.compress;
   return j;
 }
 
@@ -217,12 +218,17 @@ async function deliver(j, url, ext) {
   pushStatus();
   if (await helperReady(prefs)) {
     try {
-      const compress = j.compress && j.mode !== 'audio' && ext === 'mp4';
+      let compress = j.compress && j.mode !== 'audio' && ext === 'mp4';
+      if (compress && helperOutdated((await helperStatus()).version)) {
+        j.warning = 'not compressed: the helper is out of date, run helper\\install.bat again';
+        compress = false;
+      }
       const saved = await helperSave({
         url, name: j.name, ext: wantMp3 ? 'mp3' : ext, group: j.group,
         convert: wantMp3 ? 'mp3' : null, stage: compress, mp3Quality: prefs.mp3Quality,
       });
       revoke(j);
+      if (compress && !saved.staged) j.warning = 'not compressed: the helper did not hand the file over for compression (run helper\\install.bat again)';
       finish(j, saved.staged ? await runCompress(j, saved.staged, saved.path) : saved);
       pushStatus();
       return;
@@ -245,6 +251,10 @@ async function deliver(j, url, ext) {
 // Re-encode a saved video to HEVC via the helper; returns { path, size } of the kept file.
 async function runCompress(j, input, output) {
   const prefs = await getSettings();
+  if (helperOutdated((await helperStatus()).version)) {
+    j.warning = 'not compressed: the helper is out of date, run helper\\install.bat again';
+    return { path: input, size: null };
+  }
   j.state = 'compressing';
   j.pct = 0;
   pushStatus();
@@ -329,7 +339,7 @@ async function startJob(item, mode = 'media', group = null, compress = null) {
     } else {
       await ensureOffscreen();
       j.state = 'downloading';
-      await chrome.runtime.sendMessage({ to: 'offscreen', type: 'MG_JOB', jobId: j.jobId, item, prefs, mode, name });
+      await chrome.runtime.sendMessage({ to: 'offscreen', type: 'MG_JOB', jobId: j.jobId, item, prefs, mode, name, compress: j.compress });
     }
   } catch (e) {
     fail(j, e);
@@ -461,7 +471,11 @@ const handlers = {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.to !== 'sw') return;
   const h = handlers[msg.type];
-  if (!h) return;
+  if (!h) {
+    // Usually a page newer than this service worker: say so instead of staying silent.
+    sendResponse({ ok: false, error: `unknown request "${msg.type}": reload MediaGrab in chrome://extensions` });
+    return;
+  }
   Promise.resolve()
     .then(() => h(msg, sender))
     .then((data) => sendResponse({ ok: true, data }), (e) => sendResponse({ ok: false, error: String(e?.message || e) }));

@@ -79,7 +79,8 @@ button.icon { padding: 4px 8px; font-size: 15px; line-height: 1; }
 .actions { display: flex; gap: 6px; align-items: center; }
 
 /* Big square Save + smaller Audio to its right */
-.btns { display: flex; gap: 6px; align-items: center; flex: none; }
+/* Save | Audio on top, Compress spanning both underneath */
+.btns { display: grid; grid-template-columns: auto auto; gap: 4px; align-items: start; flex: none; }
 .btns button {
   display: flex;
   flex-direction: column;
@@ -132,9 +133,9 @@ button:focus-visible { outline: 2px solid var(--save); outline-offset: 2px; }
 }
 .row {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
-  padding: 8px;
+  padding: 6px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--card);
@@ -190,15 +191,18 @@ button.mini:hover { border-color: var(--save); }
 .est.over { color: var(--warn); }
 
 /* "Compress to HEVC" toggle chip */
+.chip-slot { grid-column: 1 / -1; }
 .chip-slot:empty { display: none; }
 button.chip {
-  margin: 4px 0 2px;
-  padding: 2px 8px;
+  width: 100%;
+  padding: 3px 4px;
   font-size: 12px;
-  border-radius: 999px;
+  font-weight: 600;
+  border-radius: 7px;
   background: var(--bg);
   color: var(--muted);
 }
+button.chip:disabled { opacity: .55; cursor: not-allowed; }
 button.chip[aria-pressed="true"] {
   color: var(--audio-fg);
   background: var(--audio-bg);

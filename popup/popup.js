@@ -1,5 +1,6 @@
 import { getSettings } from '../lib/settings.js';
 import { overLimit, fmtSize, fmtRate } from '../lib/compress.js';
+import { helperOutdated } from '../lib/helper.js';
 
 const listEl = document.getElementById('list');
 const allBtn = document.getElementById('all');
@@ -88,11 +89,11 @@ function renderItem(it) {
   const n = it.count > 1 ? ` ${it.index + 1}/${it.count}` : '';
   meta.append(el('div', 'name', `${it.kind === 'video' ? 'Video' : 'Image'}${n}${it.label ? ' · ' + it.label : ''}`));
   const est = estLine(it.est);
-  const chipSlot = el('div', 'chip-slot');
   const status = el('div', 'status', '');
-  meta.append(est, chipSlot, status);
-  rows.set(it.key, { status, kind: it.kind, est, chipSlot, item: it });
-  row.append(thumb, meta, saveButtons(() => download([it]), it.kind === 'video' ? () => download([it], 'audio') : null, it.kind));
+  meta.append(est, status);
+  const btns = saveButtons(() => download([it]), it.kind === 'video' ? () => download([it], 'audio') : null, it.kind);
+  rows.set(it.key, { status, kind: it.kind, est, chipSlot: btns.chipSlot, item: it });
+  row.append(thumb, meta, btns);
   return row;
 }
 
@@ -102,7 +103,7 @@ function makeChip(key, initialOn) {
   const chip = el('button', 'chip');
   const paint = () => {
     const on = compressState.get(key).on;
-    chip.textContent = on ? '⇣ Compress to HEVC ✓' : '⇣ Compress to HEVC';
+    chip.textContent = on ? 'Compress ✓' : 'Compress';
     chip.setAttribute('aria-pressed', String(on));
   };
   chip.title = 'Re-encode to HEVC after saving (keeps the original if it saves too little)';
@@ -121,6 +122,7 @@ function makeChip(key, initialOn) {
 async function decorate() {
   const [prefs, helper] = await Promise.all([prefsP, helperP]);
   const canCompress = !!(helper?.installed && prefs.useHelper);
+  const outdated = canCompress && helperOutdated(helper.version);
   for (const [key, r] of rows) {
     if (r.kind !== 'video' || !r.item) continue;
     const over = overLimit(r.item.est, prefs);
@@ -130,12 +132,21 @@ async function decorate() {
     }
     if (canCompress && !r.chipSlot.firstChild) {
       // Pre-tick when over the limit; unknown bitrate + auto still lets the helper decide.
-      r.chipSlot.append(makeChip(key, prefs.autoCompress && over !== false));
+      r.chipSlot.append(outdated ? outdatedChip(helper.version) : makeChip(key, prefs.autoCompress && over !== false));
     }
   }
 }
 
-// Big square Save button, with a slim full-height Audio button to its right (videos only).
+// Compression needs helper 1.4+: show why it's unavailable instead of failing silently.
+function outdatedChip(version) {
+  const chip = el('button', 'chip', 'Compress');
+  chip.disabled = true;
+  chip.title = `The MediaGrab Helper on this PC (${version || 'old version'}) is too old to compress. Run helper\\install.bat again.`;
+  return chip;
+}
+
+// Big square Save button, a slim full-height Audio button to its right (videos only),
+// and a slot under both for the Compress toggle.
 function saveButtons(onSave, onAudio, kind = 'video') {
   const btns = el('div', 'btns');
   const save = el('button', 'save');
@@ -152,6 +163,8 @@ function saveButtons(onSave, onAudio, kind = 'video') {
     audio.onclick = onAudio;
     btns.append(audio);
   }
+  btns.chipSlot = el('div', 'chip-slot');
+  btns.append(btns.chipSlot);
   return btns;
 }
 
@@ -317,18 +330,21 @@ async function renderYtdlp(tab, helper) {
   sel.append(new Option('Finding qualities…', ''));
   const hint = el('div', 'hint', '');
   const est = el('div', 'est', '');
-  const chipSlot = el('div', 'chip-slot');
   const status = el('div', 'status', '');
-  meta.append(sel, hint, est, chipSlot, status);
+  meta.append(sel, hint, est, status);
   rows.set(key, { status, kind: 'video' });
-  const prefs = await prefsP;
-  const chip = prefs.useHelper ? makeChip(key, false) : null;
-  if (chip) chipSlot.append(chip);
-  fillQualities(sel, hint, est, chip, key, tab.url);
-  row.append(el('div', 'thumb', '▶'), meta, saveButtons(
+  const btns = saveButtons(
     () => ytdlp(tab.url, false, key, sel.value ? Number(sel.value) : null),
     () => ytdlp(tab.url, true, key),
-  ));
+  );
+  const prefs = await prefsP;
+  let chip = null;
+  if (prefs.useHelper) {
+    chip = helperOutdated(helper.version) ? null : makeChip(key, false);
+    btns.chipSlot.append(chip || outdatedChip(helper.version));
+  }
+  fillQualities(sel, hint, est, chip, key, tab.url);
+  row.append(el('div', 'thumb', '▶'), meta, btns);
   box.append(row);
   listEl.append(box);
 }

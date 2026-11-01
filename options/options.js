@@ -1,5 +1,6 @@
 import { DEFAULTS, getSettings, buildName } from '../lib/settings.js';
 import { limitKbps, encoderName } from '../lib/compress.js';
+import { helperOutdated, MIN_HELPER } from '../lib/helper.js';
 
 const $ = (id) => document.getElementById(id);
 const fields = Object.keys(DEFAULTS);
@@ -54,7 +55,12 @@ async function detectEncoders(installed) {
   const out = $('encDetected');
   if (!installed) { out.textContent = 'Install the helper to compress videos.'; return; }
   const r = await sw({ type: 'MG_HELPER_ENCODERS' }).catch((e) => ({ ok: false, error: e.message }));
-  if (!r?.ok) { out.textContent = `Couldn't detect encoders: ${r?.error}`; return; }
+  if (!r) { out.textContent = "Couldn't detect encoders: MediaGrab's background didn't answer. Reload the extension in chrome://extensions."; return; }
+  if (!r.ok) {
+    const old = /unknown command/i.test(r.error || '');
+    out.textContent = old ? 'Couldn\'t detect encoders: the helper is out of date. Run helper\\install.bat again.' : `Couldn't detect encoders: ${r.error || 'unknown error'}`;
+    return;
+  }
   const e = r.data || {};
   const gpus = ['nvenc', 'qsv', 'amf'].filter((k) => e[k]);
   out.textContent = `Detected on this PC: ${[...gpus.map(encoderName), e.x265 ? encoderName('x265') : null].filter(Boolean).join(' · ') || 'none'}. ` +
@@ -76,7 +82,8 @@ async function checkHelper(force) {
   if (h.installed) {
     st.className = 'preview ok';
     st.textContent = `Connected · helper ${h.version} · yt-dlp ${h.ytdlp || 'missing'} · ffmpeg ${h.ffmpeg ? '✓' : 'missing'} · Deno ${h.deno ? '✓' : 'missing (needed for YouTube; run install.bat again)'}`;
-    if (!h.ytdlp || !h.ffmpeg || !h.deno) st.className = 'preview bad';
+    if (helperOutdated(h.version)) st.textContent += ` · helper ${MIN_HELPER}+ needed for compression: run install.bat again`;
+    if (!h.ytdlp || !h.ffmpeg || !h.deno || helperOutdated(h.version)) st.className = 'preview bad';
   } else {
     st.className = 'preview bad';
     st.textContent = h.error === 'not installed' ? 'Not installed.' : `Not available: ${h.error}`;
