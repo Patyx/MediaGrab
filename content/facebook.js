@@ -41,6 +41,7 @@
       const xml = typeof o.dash_manifest === 'string' ? o.dash_manifest : R.dash_manifests?.[0]?.manifest_xml;
       if (typeof xml === 'string' && xml.includes('<MPD')) m.xml = xml;
       m.author ||= o.owner?.name || o.video_owner?.name || '';
+      m.duration ||= Number(o.length_in_second) || (Number(o.playable_duration_in_ms) || 0) / 1000 || 0;
       m.thumb ||= o.preferred_thumbnail?.image?.uri || o.thumbnailImage?.uri || o.image?.uri || '';
       media.set(id, m);
       return id;
@@ -113,8 +114,12 @@
     const r = reps.get(m.id) || [];
     if (!r.length && !m.xml && !m.progressive.length) return null;
     const top = r.filter((x) => x.type === 'video').reduce((a, x) => Math.max(a, Math.min(x.w || x.h, x.h || x.w)), 0);
+    const short = (x) => Math.min(x.w || x.h, x.h || x.w);
+    const bestV = r.filter((x) => x.type === 'video').sort((a, b) => short(b) - short(a) || b.br - a.br)[0];
+    const bestA = r.filter((x) => x.type === 'audio').sort((a, b) => b.br - a.br)[0];
+    const est = bestV ? MG.est({ vbps: bestV.br, abps: bestA?.br || 0, w: bestV.w, h: bestV.h, dur: m.duration || 0 }) : null;
     return MG.item({
-      ...base, kind: 'video', thumb: m.thumb,
+      ...base, kind: 'video', thumb: m.thumb, est,
       label: top ? `${top}p` : m.progressive.length ? 'HD' : '',
       source: { type: 'fb', reps: r, xml: m.xml || null, progressive: m.progressive },
     });

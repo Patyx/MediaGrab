@@ -73,6 +73,47 @@
     </section>
 
     <section>
+      <h2>Compression (HEVC, needs the helper)</h2>
+      <label class="check"><input id="autoCompress" type="checkbox"> Pre-tick "Compress to HEVC" for videos over the bitrate limit (also applies to right-click downloads)</label>
+      <div class="pair">
+        <label>Limit at 720p (kbps)
+          <input id="limit720" type="number" min="300" max="50000" step="100">
+        </label>
+        <label>Limit at 1080p (kbps)
+          <input id="limit1080" type="number" min="300" max="100000" step="100">
+        </label>
+      </div>
+      <p class="note" id="limitPreview"></p>
+      <label>Encoder
+        <select id="encoder">
+          <option value="auto">Auto: graphics card if available, else CPU</option>
+          <option value="nvenc">NVIDIA NVENC (slowest, best-quality preset)</option>
+          <option value="qsv">Intel Quick Sync (slowest preset)</option>
+          <option value="amf">AMD AMF (quality preset)</option>
+          <option value="x265">CPU (x265): smallest files, slowest</option>
+        </select>
+      </label>
+      <p class="note" id="encDetected">Detecting encoders…</p>
+      <label>Quality
+        <select id="quality">
+          <option value="high">High (x265 CRF 22 · GPU CQ 22–24)</option>
+          <option value="balanced">Balanced (x265 CRF 24 · GPU CQ 25–27)</option>
+          <option value="small">Smaller files (x265 CRF 27 · GPU CQ 28–30)</option>
+        </select>
+      </label>
+      <label>CPU encoder speed
+        <select id="x265Preset">
+          <option value="medium">Medium (faster, slightly bigger)</option>
+          <option value="slow">Slow (balanced)</option>
+          <option value="slower">Slower (smallest, takes longest)</option>
+        </select>
+      </label>
+      <label>Keep the original if compression saves less than (%)
+        <input id="minSavings" type="number" min="0" max="90" step="1">
+      </label>
+    </section>
+
+    <section>
       <h2>MediaGrab Helper (Windows)</h2>
       <p id="helperStatus" class="preview">Checking…</p>
       <div id="helperInstall" hidden>

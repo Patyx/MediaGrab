@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$Version = '1.3.1'
+$Version = '1.4.0'
 $null = Add-Type -AssemblyName System.Windows.Forms
 $null = Add-Type -AssemblyName System.Drawing
 
@@ -21,6 +21,7 @@ $stdout = [Console]::OpenStandardOutput()
 $open = @{}   # save id -> FileStream
 $paths = @{}  # save id -> path
 $temps = @{}  # save id -> temporary .m4a awaiting MP3 conversion
+$staged = @{} # save id -> original video kept aside for compression
 
 # ------------------------------------------------------------------ messaging
 
@@ -52,19 +53,32 @@ function Send([hashtable]$obj) {
 
 # ------------------------------------------------------------------ saving
 
-function Get-LastDir {
+function Read-State {
+  $h = @{}
   try {
-    $s = Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
-    if ($s.lastDir -and (Test-Path -LiteralPath $s.lastDir -PathType Container)) { return $s.lastDir }
+    $o = Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
+    foreach ($p in $o.PSObject.Properties) { $h[$p.Name] = $p.Value }
   } catch {}
+  return $h
+}
+
+function Write-State([hashtable]$h) {
+  $null = New-Item -ItemType Directory -Force -Path $Root
+  [IO.File]::WriteAllText($StateFile, ($h | ConvertTo-Json -Depth 5))
+}
+
+function Get-LastDir {
+  $d = (Read-State).lastDir
+  if ($d -and (Test-Path -LiteralPath $d -PathType Container)) { return $d }
   $dl = Join-Path $env:USERPROFILE 'Downloads'
   if (Test-Path -LiteralPath $dl) { return $dl }
   return [Environment]::GetFolderPath('MyDocuments')
 }
 
 function Set-LastDir([string]$dir) {
-  $null = New-Item -ItemType Directory -Force -Path $Root
-  [IO.File]::WriteAllText($StateFile, (@{ lastDir = $dir } | ConvertTo-Json))
+  $s = Read-State
+  $s.lastDir = $dir
+  Write-State $s
 }
 
 function Get-UniquePath([string]$p) {
@@ -235,17 +249,20 @@ function Invoke-Info($m) {
     $out = New-Object Collections.Generic.List[string]
     $argv = (Get-BaseArgs $m $cf) + @('--no-simulate', '--skip-download', '--write-info-json', '-o', "$tmp.%(ext)s",
       '-O', '%(uploader_id)s', '-O', '%(uploader)s', '-O', '%(title)s', '-O', '%(id)s',
-      '-O', '%(formats.:.width)j', '-O', '%(formats.:.height)j', '-O', '%(formats.:.vcodec)j', '--', [string]$m.url)
+      '-O', '%(formats.:.width)j', '-O', '%(formats.:.height)j', '-O', '%(formats.:.vcodec)j', '-O', '%(formats.:.acodec)j',
+      '-O', '%(formats.:.filesize)j', '-O', '%(formats.:.filesize_approx)j', '-O', '%(formats.:.vbr)j', '-O', '%(formats.:.abr)j',
+      '-O', '%(formats.:.tbr)j', '-O', '%(duration)s', '--', [string]$m.url)
     $r = Invoke-Ytdlp $argv { param($l) $out.Add($l) }
     if ($r.code -ne 0 -and $cf -and (Test-FormatError $r.err)) {
       $out.Clear()
       $r = Invoke-Ytdlp (Remove-CookieArgs $argv) { param($l) $out.Add($l) }
     }
     if ($r.code -ne 0) { throw ((Get-YtdlpError $r.err) + (Get-YoutubeHint $r.err)) }
-    $v = @(@($out | Select-Object -Last 7) | ForEach-Object { if ($_ -eq 'NA') { '' } else { $_ } })
+    $v = @(@($out | Select-Object -Last 14) | ForEach-Object { if ($_ -eq 'NA') { '' } else { $_ } })
     $info = "$tmp.info.json"
     Send @{ rid = $m.rid; event = 'info'; uploader_id = $v[0]; uploader = $v[1]; title = $v[2]; id = $v[3]
-      widths = $v[4]; heights = $v[5]; vcodecs = $v[6]
+      widths = $v[4]; heights = $v[5]; vcodecs = $v[6]; acodecs = $v[7]; filesizes = $v[8]; approx = $v[9]
+      vbrs = $v[10]; abrs = $v[11]; tbrs = $v[12]; duration = $v[13]
       infoFile = $(if (Test-Path -LiteralPath $info) { $info } else { $null }) }
   } finally {
     if ($cf) { Remove-Item -LiteralPath $cf -Force -ErrorAction SilentlyContinue }
@@ -328,6 +345,182 @@ function Get-Hello($m) {
   Send @{ rid = $m.rid; event = 'hello'; version = $Version; ytdlp = $ver; hasYtdlp = [bool](Get-Ytdlp); ffmpeg = $ff; deno = $deno }
 }
 
+# ------------------------------------------------------------------ compression (HEVC)
+
+function Get-Ff([string]$name) {
+  $c = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($c) { return $c.Source }
+  return $null
+}
+
+# Resolution, video bitrate and duration of a file.
+function Get-Probe([string]$path) {
+  $ffprobe = Get-Ff 'ffprobe'
+  if (-not $ffprobe) { throw 'ffprobe not found. Run install.bat from the MediaGrab helper folder.' }
+  $out = New-Object Collections.Generic.List[string]
+  $r = Invoke-Tool $ffprobe @('-v', 'error', '-select_streams', 'v:0', '-show_entries',
+    'stream=codec_name,width,height,bit_rate:format=duration,size', '-of', 'json', $path) { param($l) $out.Add($l) }
+  if ($r.code -ne 0) { throw "ffprobe failed: $($r.err.Trim())" }
+  $j = ($out -join "`n") | ConvertFrom-Json
+  $s = @($j.streams)[0]
+  if (-not $s) { throw 'no video stream found' }
+  $dur = [double]$j.format.duration
+  $size = [int64]$j.format.size
+  $vbr = 0.0
+  if ($s.bit_rate) { $vbr = [double]$s.bit_rate } elseif ($dur -gt 0) { $vbr = [math]::Max(0, $size * 8 / $dur - 128000) }
+  return @{ codec = [string]$s.codec_name; w = [int]$s.width; h = [int]$s.height; vkbps = [int][math]::Round($vbr / 1000); dur = $dur; size = $size }
+}
+
+# Bitrate limit (kbps) for a resolution: a curve through the 720p and 1080p settings.
+function Get-LimitKbps([int]$short, [double]$a720, [double]$a1080) {
+  if ($a720 -le 0 -or $a1080 -le $a720) { $a720 = 3000; $a1080 = 5000 }
+  $k2 = 2 * [math]::Log($a1080 / $a720) / [math]::Log(2.25)
+  return $a1080 * [math]::Pow([math]::Max(144, $short) / 1080.0, $k2)
+}
+
+# Quality value per encoder for High / Balanced / Smaller (lower = better quality).
+function Get-Quality([string]$enc, [string]$level) {
+  $i = @{ high = 0; balanced = 1; small = 2 }[$level]
+  if ($null -eq $i) { $i = 1 }
+  $t = @{ x265 = @(22, 24, 27); nvenc = @(24, 27, 30); qsv = @(22, 25, 28); amf = @(22, 25, 28) }[$enc]
+  return $t[$i]
+}
+
+# ffmpeg video encoder arguments. GPU encoders use their slowest, most efficient presets
+# ('full'); 'basic' drops the options older GPUs/drivers reject.
+function Get-EncoderArgs([string]$enc, [int]$q, [int]$capK, [string]$tier, [string]$x265Preset) {
+  $cap = @()
+  if ($capK -gt 0) { $cap = @('-maxrate', "${capK}k", '-bufsize', "$($capK * 2)k") }
+  switch ($enc) {
+    'nvenc' {
+      if ($tier -eq 'basic') { return @('-c:v', 'hevc_nvenc', '-preset', 'p7', '-rc', 'vbr', '-cq', "$q", '-b:v', '0') + $cap }
+      return @('-c:v', 'hevc_nvenc', '-preset', 'p7', '-tune', 'hq', '-multipass', 'fullres', '-rc', 'vbr', '-cq', "$q", '-b:v', '0',
+        '-spatial-aq', '1', '-temporal-aq', '1', '-rc-lookahead', '32') + $cap
+    }
+    'qsv' {
+      if ($tier -eq 'basic') { return @('-c:v', 'hevc_qsv', '-global_quality', "$q") }
+      return @('-c:v', 'hevc_qsv', '-preset', 'veryslow', '-global_quality', "$q")
+    }
+    'amf' {
+      if ($tier -eq 'basic') { return @('-c:v', 'hevc_amf', '-rc', 'cqp', '-qp_i', "$q", '-qp_p', "$q") }
+      return @('-c:v', 'hevc_amf', '-quality', 'quality', '-rc', 'cqp', '-qp_i', "$q", '-qp_p', "$q", '-qp_b', "$q")
+    }
+    default {
+      $preset = $(if ($x265Preset) { $x265Preset } else { 'slow' })
+      return @('-c:v', 'libx265', '-preset', $preset, '-crf', "$q", '-pix_fmt', 'yuv420p', '-x265-params', 'log-level=error') + $cap
+    }
+  }
+}
+
+# Which HEVC encoders actually work here (a 1-second test encode each). Cached per ffmpeg build.
+function Get-Encoders([bool]$force) {
+  $ff = Get-Ff 'ffmpeg'
+  if (-not $ff) { throw 'ffmpeg not found. Run install.bat from the MediaGrab helper folder.' }
+  $stamp = "$ff|$((Get-Item -LiteralPath $ff).LastWriteTimeUtc.Ticks)"
+  $s = Read-State
+  if (-not $force -and $s.encoders -and $s.encoders.stamp -eq $stamp) { return $s.encoders }
+  $out = New-Object Collections.Generic.List[string]
+  $null = Invoke-Tool $ff @('-hide_banner', '-encoders') { param($l) $out.Add($l) }
+  $listed = $out -join "`n"
+  $res = [ordered]@{ stamp = $stamp; x265 = [bool]($listed -match '\blibx265\b') }
+  foreach ($e in 'nvenc', 'qsv', 'amf') {
+    $tier = $null
+    if ($listed -match "\bhevc_$e\b") {
+      foreach ($t in 'full', 'basic') {
+        $argv = @('-hide_banner', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '1') +
+          (Get-EncoderArgs $e 28 0 $t 'slow') + @('-f', 'null', '-')
+        if ((Invoke-Tool $ff $argv $null).code -eq 0) { $tier = $t; break }
+      }
+    }
+    $res[$e] = $tier
+  }
+  $s.encoders = $res
+  Write-State $s
+  return $res
+}
+
+function Move-Result([string]$from, [string]$to) {
+  if ($from -ne $to) { Move-Item -LiteralPath $from -Destination $to -Force }
+}
+
+# Re-encode the video to HEVC (audio copied). mode 'auto' only compresses when the video
+# bitrate is over the limit; 'force' always tries. The original is kept when the saving is
+# below minSavings %. The result always ends up at $m.output.
+function Invoke-Compress($m) {
+  $in = [string]$m.input
+  $outPath = [string]$m.output
+  try {
+    $probe = Get-Probe $in
+    $short = [math]::Min($probe.w, $probe.h)
+    if ($short -le 0) { $short = [math]::Max($probe.w, $probe.h) }
+    $limit = [int](Get-LimitKbps $short ([double]$m.limit720) ([double]$m.limit1080))
+    $base = @{ rid = $m.rid; event = 'compressed'; vkbps = $probe.vkbps; limit = $limit; origSize = $probe.size }
+    if ($m.mode -eq 'auto' -and $probe.vkbps -le $limit) {
+      Move-Result $in $outPath
+      Send ($base + @{ path = $outPath; size = $probe.size; outcome = 'under-limit' })
+      return
+    }
+
+    $encs = Get-Encoders $false
+    $choice = [string]$m.encoder
+    if ($choice -eq 'auto' -or -not $choice) {
+      $choice = 'x265'
+      foreach ($e in 'nvenc', 'qsv', 'amf') { if ($encs.$e) { $choice = $e; break } }
+    }
+    $tier = $null
+    if ($choice -ne 'x265') { $tier = $encs.$choice; if (-not $tier) { $choice = 'x265' } }
+    $cap = [int][math]::Min($limit, [math]::Max(300, $probe.vkbps))
+
+    $ff = Get-Ff 'ffmpeg'
+    $tmp = "$outPath.mg-hevc.mp4"
+    $state = @{ last = -1; dur = $probe.dur }
+    $onLine = {
+      param($l)
+      if ($l -match '^out_time_(?:us|ms)=(\d+)' -and $state.dur -gt 0) {
+        $pct = [int][math]::Min(99, [double]$Matches[1] / 1e6 / $state.dur * 100)
+        if ($pct -ne $state.last) { $state.last = $pct; Send @{ rid = $m.rid; event = 'progress'; pct = $pct } }
+      }
+    }
+    $encode = {
+      param($enc, $tr)
+      $q = Get-Quality $enc ([string]$m.quality)
+      $argv = @('-hide_banner', '-nostdin', '-y', '-v', 'error', '-i', $in, '-map', '0:v:0', '-map', '0:a?', '-c:a', 'copy') +
+        (Get-EncoderArgs $enc $q $cap $tr ([string]$m.x265Preset)) +
+        @('-tag:v', 'hvc1', '-movflags', '+faststart', '-map_metadata', '0', '-progress', 'pipe:1', '-nostats', $tmp)
+      return Invoke-Tool $ff $argv $onLine
+    }
+    $r = & $encode $choice $tier
+    if ($r.code -ne 0 -and $choice -ne 'x265') {
+      # GPU encoder failed on this file: fall back to the CPU.
+      Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+      $choice = 'x265'
+      $r = & $encode 'x265' $null
+    }
+    if ($r.code -ne 0) {
+      Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+      throw "ffmpeg failed: $(($r.err.Trim() -split "`r?`n" | Select-Object -Last 2) -join ' ')"
+    }
+
+    $newSize = (Get-Item -LiteralPath $tmp).Length
+    $saved = [math]::Round((1 - $newSize / [double]$probe.size) * 100)
+    if ($saved -lt [double]$m.minSavings) {
+      Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+      Move-Result $in $outPath
+      Send ($base + @{ path = $outPath; size = $probe.size; outcome = 'kept'; savedPct = $saved; encoder = $choice })
+      return
+    }
+    Move-Item -LiteralPath $tmp -Destination $outPath -Force
+    if ($in -ne $outPath) { Remove-Item -LiteralPath $in -Force -ErrorAction SilentlyContinue }
+    Send ($base + @{ path = $outPath; size = $newSize; outcome = 'compressed'; savedPct = $saved; encoder = $choice })
+  } catch {
+    # Never lose the download: put the original where the user asked for it.
+    if ((Test-Path -LiteralPath $in) -and -not (Test-Path -LiteralPath $outPath)) { Move-Result $in $outPath }
+    elseif ((Test-Path -LiteralPath $in) -and $in -ne $outPath) { Move-Result $in $outPath }
+    $size = $(if (Test-Path -LiteralPath $outPath) { (Get-Item -LiteralPath $outPath).Length } else { $null })
+    Send @{ rid = $m.rid; event = 'compressed'; path = $outPath; size = $size; outcome = 'failed'; error = $_.Exception.Message }
+  }
+}
+
 # ------------------------------------------------------------------ main loop
 
 function Invoke-HostCommand($m) {
@@ -340,6 +533,10 @@ function Invoke-HostCommand($m) {
       if ($m.convert -eq 'mp3') {
         $target = "$p.mg-part.m4a"
         $temps[[string]$m.id] = $target
+      } elseif ($m.stage) {
+        # Will be compressed next: keep the original under a temporary name for now.
+        $target = "$p.mg-src.mp4"
+        $staged[[string]$m.id] = $target
       }
       $open[[string]$m.id] = [IO.File]::Open($target, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
       $paths[[string]$m.id] = $p
@@ -363,18 +560,27 @@ function Invoke-HostCommand($m) {
           Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
         }
       }
-      Send @{ rid = $m.rid; event = 'saved'; path = $p; size = (Get-Item -LiteralPath $p).Length }
+      $st = $staged[$id]
+      if ($st) {
+        $staged.Remove($id)
+        Send @{ rid = $m.rid; event = 'saved'; path = $p; staged = $st; size = (Get-Item -LiteralPath $st).Length }
+      } else {
+        Send @{ rid = $m.rid; event = 'saved'; path = $p; size = (Get-Item -LiteralPath $p).Length }
+      }
     }
     'save-abort' {
       $id = [string]$m.id
       if ($open[$id]) { $open[$id].Close(); $open.Remove($id) }
       if ($paths[$id]) { Remove-Item -LiteralPath $paths[$id] -Force -ErrorAction SilentlyContinue; $paths.Remove($id) }
       if ($temps[$id]) { Remove-Item -LiteralPath $temps[$id] -Force -ErrorAction SilentlyContinue; $temps.Remove($id) }
+      if ($staged[$id]) { Remove-Item -LiteralPath $staged[$id] -Force -ErrorAction SilentlyContinue; $staged.Remove($id) }
       Send @{ rid = $m.rid; event = 'aborted' }
     }
     'ytdlp-info' { Invoke-Info $m }
     'ytdlp-download' { Invoke-Download $m }
     'ytdlp-update' { Invoke-Update $m }
+    'compress' { Invoke-Compress $m }
+    'encoders' { Send @{ rid = $m.rid; event = 'encoders'; encoders = (Get-Encoders ([bool]$m.force)) } }
     'open-file' {
       $p = [string]$m.path
       if (-not ($p -and (Test-Path -LiteralPath $p -PathType Leaf))) { throw 'File not found (moved or deleted?)' }

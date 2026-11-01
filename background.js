@@ -1,7 +1,8 @@
 // Service worker: context menu, job queue, chrome.downloads, and the bridge between
 // popup, content scripts, the offscreen document and the optional Windows helper.
 import { getSettings as loadSettings, buildName, cleanFolder } from './lib/settings.js';
-import { helperStatus, helperSave, ytdlpDownload, ytdlpUpdate, ytdlpProbe, cookiesFor, helperOpenFolder, helperOpenFile } from './lib/helper.js';
+import { helperStatus, helperSave, ytdlpDownload, ytdlpUpdate, ytdlpProbe, cookiesFor, helperOpenFolder, helperOpenFile, helperCompress, helperEncoders } from './lib/helper.js';
+import { fmtSize, fmtRate, encoderName } from './lib/compress.js';
 
 // Settings are read on every job; cache them until they change.
 let settingsCache = null;
@@ -64,7 +65,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (audio) items = items.filter((it) => it.kind === 'video');
     if (!items.length) throw new Error(posts.find((p) => p.error)?.error || (audio ? 'No video with audio in this post' : 'No media found in this post'));
     const group = items.length > 1 ? crypto.randomUUID() : null;
-    items.forEach((it) => startJob(it, audio ? 'audio' : 'media', group));
+    const prefs = await getSettings();
+    const compress = !audio && prefs.autoCompress ? 'auto' : null;
+    items.forEach((it) => startJob(it, audio ? 'audio' : 'media', group, it.kind === 'video' ? compress : null));
   } catch (e) {
     flagError(e);
   }
@@ -124,7 +127,7 @@ let lastError = null;
 
 // Finished jobs survive service-worker restarts (session storage), so a reopened popup
 // still shows "Saved · size" with its open buttons.
-const PUBLIC = ['jobId', 'key', 'state', 'pct', 'error', 'warning', 'mode', 'via', 'path', 'size', 'downloadId', 'at'];
+const PUBLIC = ['jobId', 'key', 'state', 'pct', 'error', 'warning', 'note', 'mode', 'via', 'path', 'size', 'downloadId', 'at'];
 const pick = (j) => Object.fromEntries(PUBLIC.map((k) => [k, j[k]]));
 const restored = chrome.storage.session.get('jobs').then(({ jobs: saved }) => {
   for (const j of saved || []) if (!jobs.has(j.jobId)) jobs.set(j.jobId, j);
@@ -214,11 +217,13 @@ async function deliver(j, url, ext) {
   pushStatus();
   if (await helperReady(prefs)) {
     try {
-      finish(j, await helperSave({
+      const compress = j.compress && j.mode !== 'audio' && ext === 'mp4';
+      const saved = await helperSave({
         url, name: j.name, ext: wantMp3 ? 'mp3' : ext, group: j.group,
-        convert: wantMp3 ? 'mp3' : null, mp3Quality: prefs.mp3Quality,
-      }));
+        convert: wantMp3 ? 'mp3' : null, stage: compress, mp3Quality: prefs.mp3Quality,
+      });
       revoke(j);
+      finish(j, saved.staged ? await runCompress(j, saved.staged, saved.path) : saved);
       pushStatus();
       return;
     } catch (e) {
@@ -235,6 +240,30 @@ async function deliver(j, url, ext) {
     j.warning = 'MP3 needs the MediaGrab Helper (with "Save files through the helper" on), saved as M4A';
   }
   j.downloadId = await saveFile(url, j.name, ext);
+}
+
+// Re-encode a saved video to HEVC via the helper; returns { path, size } of the kept file.
+async function runCompress(j, input, output) {
+  const prefs = await getSettings();
+  j.state = 'compressing';
+  j.pct = 0;
+  pushStatus();
+  let r;
+  try {
+    r = await helperCompress({
+      input, output, mode: j.compress === 'force' ? 'force' : 'auto',
+      limit720: prefs.limit720, limit1080: prefs.limit1080, encoder: prefs.encoder,
+      quality: prefs.quality, x265Preset: prefs.x265Preset, minSavings: prefs.minSavings,
+    }, (pct) => { j.pct = pct; pushStatus(); });
+  } catch (e) {
+    j.warning = `compression failed (${e.message}); the original may still be named "${input}"`;
+    return { path: input, size: null };
+  }
+  if (r.outcome === 'compressed') j.note = `HEVC −${r.savedPct}% (was ${fmtSize(r.origSize)}) · ${encoderName(r.encoder)}`;
+  else if (r.outcome === 'kept') j.note = `kept original: HEVC only saved ${r.savedPct}%`;
+  else if (r.outcome === 'under-limit') j.note = `kept original: ${fmtRate(r.vkbps)} is under the ${fmtRate(r.limit)} limit`;
+  else if (r.outcome === 'failed') j.warning = `compression failed (${r.error}), saved the original`;
+  return { path: r.path, size: r.size };
 }
 
 const siteLabel = (url) => {
@@ -259,7 +288,7 @@ async function runYtdlp(j, { url, audio, height = null, info = null }) {
   j.error = undefined;
   pushStatus();
   try {
-    finish(j, await ytdlpDownload({
+    let saved = await ytdlpDownload({
       url,
       name: info ? makeName(info) : null,
       infoFile: info?.infoFile || null,
@@ -274,19 +303,23 @@ async function runYtdlp(j, { url, audio, height = null, info = null }) {
       group: j.group,
       makeName,
       onProgress: (pct) => { j.pct = pct; pushStatus(); },
-    }));
+    });
+    if (j.compress && !audio && /\.mp4$/i.test(saved.path || '')) saved = await runCompress(j, saved.path, saved.path);
+    finish(j, saved);
   } catch (e) {
     fail(j, e);
   }
   pushStatus();
 }
 
-async function startJob(item, mode = 'media', group = null) {
+// compress: null | 'auto' (only if over the limit) | 'force' (always try).
+async function startJob(item, mode = 'media', group = null, compress = null) {
   prune();
   const prefs = await getSettings();
   const name = item.name ? buildName(item.name, prefs) : item.filename.replace(/\//g, '_');
   const j = upsert({ jobId: crypto.randomUUID(), key: item.key, name, mode });
   j.group = group;
+  j.compress = item.kind === 'video' && mode === 'media' ? compress : null;
   pushStatus();
   try {
     const s = item.source;
@@ -336,10 +369,14 @@ const handlers = {
     const posts = await askContent(tab, { type: 'MG_LIST' });
     return posts === null ? { unsupported: true, posts: [] } : { unsupported: false, posts };
   },
-  MG_DOWNLOAD({ items, mode }) {
+  // compress: { [item key]: 'auto' | 'force' } from the popup's per-item toggles.
+  MG_DOWNLOAD({ items, mode, compress }) {
     lastError = null;
     const group = items.length > 1 ? crypto.randomUUID() : null;
-    items.forEach((it) => startJob(it, mode || 'media', group));
+    items.forEach((it) => startJob(it, mode || 'media', group, compress?.[it.key] || null));
+  },
+  MG_HELPER_ENCODERS({ force }) {
+    return helperEncoders(!!force);
   },
   async MG_STATUS_GET() {
     await restored;
@@ -369,10 +406,11 @@ const handlers = {
     await helperStatus(true, true);
     return r;
   },
-  async MG_YTDLP({ url, audio, key, height }) {
+  async MG_YTDLP({ url, audio, key, height, compress }) {
     lastError = null;
     const prefs = await getSettings();
     const j = upsert({ jobId: crypto.randomUUID(), key, name: null, mode: audio ? 'audio' : 'media' });
+    j.compress = audio ? null : compress || null;
     pushStatus();
     const p = probes.get(url);
     probes.delete(url); // the helper deletes the info file after use
@@ -387,7 +425,8 @@ const handlers = {
       probes.set(url, p);
       p.promise.catch(() => { if (probes.get(url) === p) probes.delete(url); });
     }
-    return { qualities: (await p.promise).qualities };
+    const r = await p.promise;
+    return { qualities: r.qualities, estimates: r.estimates };
   },
   async MG_FETCH_JSON({ url, headers }) {
     const r = await fetch(url, { credentials: 'include', headers: headers || {} });

@@ -72,7 +72,7 @@
     const cands = [];
     for (const b of v.bitrateInfo || []) {
       const pa = b.PlayAddr || {};
-      if (pa.UrlList?.length) cands.push({ w: pa.Width || 0, h: pa.Height || 0, br: b.Bitrate || 0, codec: b.CodecType || '', urls: pa.UrlList });
+      if (pa.UrlList?.length) cands.push({ w: pa.Width || 0, h: pa.Height || 0, br: b.Bitrate || 0, size: Number(pa.DataSize) || 0, codec: b.CodecType || '', urls: pa.UrlList });
     }
     if (v.playAddr) cands.push({ w: v.width || 0, h: v.height || 0, br: v.bitrate || 0, codec: v.codecType || '', urls: [v.playAddr] });
     cands.sort((a, b) => b.w * b.h - a.w * a.h || b.br - a.br);
@@ -84,6 +84,7 @@
       items: [MG.item({
         ...base, kind: 'video', index: 0, count: 1,
         thumb: v.cover || v.originCover || '',
+        est: MG.est({ vbps: best.br, w: best.w, h: best.h, dur: v.duration || 0, bytes: best.size || 0 }),
         label: best.h ? `${Math.min(best.w || best.h, best.h)}p` : '',
         // The offscreen worker picks the stream using the quality settings.
         source: { type: 'tiktok', cands },

@@ -102,8 +102,8 @@ button.save {
 }
 button.save:hover { background: var(--save-hover); border-color: var(--save-hover); }
 button.audio {
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 60px;
   border-radius: 9px;
   background: var(--audio-bg);
   border-color: color-mix(in srgb, var(--audio-fg) 35%, transparent);
@@ -183,3 +183,24 @@ button.mini {
   background: var(--bg);
 }
 button.mini:hover { border-color: var(--save); }
+
+/* Size / bitrate estimate before downloading; orange when over the bitrate limit */
+.est { font-size: 12px; color: var(--muted); }
+.est:empty { display: none; }
+.est.over { color: var(--warn); }
+
+/* "Compress to HEVC" toggle chip */
+.chip-slot:empty { display: none; }
+button.chip {
+  margin: 4px 0 2px;
+  padding: 2px 8px;
+  font-size: 12px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+}
+button.chip[aria-pressed="true"] {
+  color: var(--audio-fg);
+  background: var(--audio-bg);
+  border-color: color-mix(in srgb, var(--audio-fg) 45%, transparent);
+}

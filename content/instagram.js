@@ -67,7 +67,12 @@
           versions: c.video_versions.map((v) => ({ url: v.url, w: v.width || 0, h: v.height || 0 })),
           hasAudio: c.has_audio !== false,
         };
-        return MG.item({ ...base, kind: 'video', label: c.video_dash_manifest ? 'best quality' : p.height ? `${p.height}p` : '', source });
+        let est = null;
+        if (c.video_dash_manifest) {
+          const { v, a } = MG.dashBest(c.video_dash_manifest);
+          if (v) est = MG.est({ vbps: v.bw, abps: a?.bw || 0, w: v.w, h: v.h, dur: c.video_duration || 0 });
+        }
+        return MG.item({ ...base, kind: 'video', est, label: c.video_dash_manifest ? 'best quality' : p.height ? `${p.height}p` : '', source });
       }
       const img = biggest(c.image_versions2?.candidates);
       if (!img) return null;

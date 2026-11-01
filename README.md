@@ -22,6 +22,8 @@
 - **Right-click** any post → *Download media from this post* / *Download audio from this post*.
 - **Galleries and carousels**: every image and video in a post, numbered.
 - **Audio only** as MP3 (converted by the helper's ffmpeg) or M4A (the original track, no re-encoding).
+- **Size before you save**: "≈ 48 MB · 7.8 Mbps" for videos, where the site publishes it (Reddit, X, TikTok, Instagram and Facebook DASH, YouTube via yt-dlp). It turns orange when the video is over your bitrate limit.
+- **Save + compress to HEVC** (helper): a per-video *Compress to HEVC* toggle, pre-ticked for videos over your limit (by default 3000 kbps at 720p and 5000 kbps at 1080p; other resolutions follow the same curve). Uses your graphics card (NVENC / Quick Sync / AMF, slowest and most efficient preset) or x265 on the CPU, copies the audio untouched, and keeps the original if it saves less than 15%. Everything is adjustable in Settings.
 - **After saving**: file size, 📁 show in folder, ▶ play. **📂 Open folder** jumps to your last save.
 - **Filenames** like `timelapse - Golden hour timelapse from the.mp4` (subreddit or author, then the first 30 characters of the description), adjustable in Settings.
 - **Quality settings**: maximum resolution, prefer H.264, use X's sharper HLS stream.
@@ -50,7 +52,8 @@ Chrome extensions can't run programs, and Chrome always opens an extension's Sav
 
 - the **Windows Save dialog opening at the last folder you used** (any drive). "Download all" asks once and saves the rest next to the first file;
 - **yt-dlp** for YouTube and every site MediaGrab doesn't handle itself, with a **quality picker** that lists the video's real qualities, remembers your choice, and falls back to the highest one below it;
-- **MP3** audio (ffmpeg conversion).
+- **MP3** audio (ffmpeg conversion);
+- **HEVC compression** of large videos after saving (ffmpeg).
 
 To install it, double-click `helper\install.bat`. It needs no admin rights, winget or PATH changes. It:
 

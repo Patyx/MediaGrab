@@ -1,4 +1,5 @@
 import { DEFAULTS, getSettings, buildName } from '../lib/settings.js';
+import { limitKbps, encoderName } from '../lib/compress.js';
 
 const $ = (id) => document.getElementById(id);
 const fields = Object.keys(DEFAULTS);
@@ -22,6 +23,8 @@ function refresh(s) {
   $('preview').textContent = `${buildName(sample, s)}.mp4`;
   $('folderRow').setAttribute('aria-disabled', String(s.saveAs));
   $('folder').disabled = s.saveAs;
+  const lim = (h) => Math.round(limitKbps(h, s.limit720, s.limit1080) / 100) * 100;
+  $('limitPreview').textContent = `Videos above these bitrates count as "worth compressing". Other resolutions follow the same curve: 480p ${lim(480)} · 1440p ${lim(1440)} · 4K ${lim(2160)} kbps.`;
 }
 
 async function save() {
@@ -43,8 +46,20 @@ async function save() {
     el.addEventListener(el.type === 'text' || el.type === 'number' ? 'input' : 'change', save);
   }
   refresh(s);
-  checkHelper(true);
+  checkHelper(true).then(detectEncoders);
 })();
+
+// Which HEVC encoders work on this PC (the helper test-encodes once and caches it).
+async function detectEncoders(installed) {
+  const out = $('encDetected');
+  if (!installed) { out.textContent = 'Install the helper to compress videos.'; return; }
+  const r = await sw({ type: 'MG_HELPER_ENCODERS' }).catch((e) => ({ ok: false, error: e.message }));
+  if (!r?.ok) { out.textContent = `Couldn't detect encoders: ${r?.error}`; return; }
+  const e = r.data || {};
+  const gpus = ['nvenc', 'qsv', 'amf'].filter((k) => e[k]);
+  out.textContent = `Detected on this PC: ${[...gpus.map(encoderName), e.x265 ? encoderName('x265') : null].filter(Boolean).join(' · ') || 'none'}. ` +
+    `Auto uses ${gpus.length ? encoderName(gpus[0]) : 'x265 (CPU)'}.`;
+}
 
 // ---------------------------------------------------------------- helper status
 
@@ -66,6 +81,7 @@ async function checkHelper(force) {
     st.className = 'preview bad';
     st.textContent = h.error === 'not installed' ? 'Not installed.' : `Not available: ${h.error}`;
   }
+  return h.installed;
 }
 
 $('helperCheck').onclick = () => checkHelper(true);

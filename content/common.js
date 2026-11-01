@@ -100,7 +100,8 @@
     index: p.index,
     count: p.count,
     filename: MG.filename(p),
-    url: p.postUrl || location.href, // post page, for yt-dlp fallback / MP3
+    url: p.postUrl || location.href, // post page
+    est: p.est || null, // { bytes, vkbps, w, h } estimated before downloading, when the site tells us
     // Raw parts so the service worker can apply the user's filename settings.
     name: { site: p.site, handle: p.handle ?? p.author ?? '', handleKind: p.handleKind || 'user', desc: p.desc || '', postId: p.postId, index: p.index, count: p.count },
     source: p.source,
@@ -111,6 +112,31 @@
     const r = await chrome.runtime.sendMessage({ to: 'sw', type: 'MG_FETCH_JSON', url, headers });
     if (!r?.ok) throw new Error(r?.error || 'fetch failed');
     return r.data;
+  };
+
+  // Size/bitrate estimate from bitrates (bps) and duration (s); bytes wins when known exactly.
+  MG.est = ({ vbps, abps = 0, w = 0, h = 0, dur = 0, bytes = 0 }) => {
+    if (!vbps && !bytes) return null;
+    const total = bytes || (dur ? Math.round(((vbps || 0) + (abps || 0)) / 8 * dur) : 0);
+    return { vkbps: vbps ? Math.round(vbps / 1000) : 0, w, h, bytes: total || 0 };
+  };
+
+  // Best video + audio bandwidth from a DASH manifest (for estimates only).
+  MG.dashBest = (xml) => {
+    try {
+      const doc = new DOMParser().parseFromString(xml, 'application/xml');
+      let v = null, a = null;
+      for (const r of doc.getElementsByTagName('Representation')) {
+        const as = r.parentElement;
+        const attr = (n) => r.getAttribute(n) || as?.getAttribute(n) || '';
+        const type = (attr('contentType') || attr('mimeType')).split('/')[0] || (/mp4a|opus/.test(attr('codecs')) ? 'audio' : 'video');
+        const x = { bw: Number(r.getAttribute('bandwidth')) || 0, w: Number(attr('width')) || 0, h: Number(attr('height')) || 0 };
+        const short = (o) => Math.min(o.w || o.h, o.h || o.w);
+        if (type === 'audio') { if (!a || x.bw > a.bw) a = x; }
+        else if (!v || short(x) > short(v) || (short(x) === short(v) && x.bw > v.bw)) v = x;
+      }
+      return { v, a };
+    } catch { return { v: null, a: null }; }
   };
 
   MG.uniqueBy = (arr, keyFn) => {

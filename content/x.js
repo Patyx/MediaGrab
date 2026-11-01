@@ -59,7 +59,9 @@
       const top = variants[0];
       const gif = m.type === 'animated_gif';
       const label = gif ? 'GIF' : top.h ? `${Math.min(top.w, top.h)}p${hls ? '+' : ''}` : '';
-      return MG.item({ ...base, kind: 'video', thumb, label, source: { type: 'x', variants, hls, gif } });
+      const dur = (m.video_info?.duration_millis || 0) / 1000;
+      const est = MG.est({ vbps: top.br, abps: gif ? 0 : 128000, w: top.w, h: top.h, dur });
+      return MG.item({ ...base, kind: 'video', thumb, label, est, source: { type: 'x', variants, hls, gif } });
     }).filter(Boolean);
   }
 

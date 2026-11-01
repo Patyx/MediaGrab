@@ -1,8 +1,24 @@
+import { getSettings } from '../lib/settings.js';
+import { overLimit, fmtSize, fmtRate } from '../lib/compress.js';
+
 const listEl = document.getElementById('list');
 const allBtn = document.getElementById('all');
 const noticeEl = document.getElementById('notice');
 const rows = new Map(); // item key -> { status element, kind, sig }
 let items = [];
+
+// Per-video "Compress to HEVC" toggles: key -> { on, touched }. An untouched toggle that was
+// pre-ticked by the auto setting sends 'auto' (helper re-checks the real bitrate); one the
+// user ticked sends 'force'.
+const compressState = new Map();
+const compressMode = (key) => {
+  const c = compressState.get(key);
+  return c?.on ? (c.touched ? 'force' : 'auto') : null;
+};
+
+// Settings and helper status, needed for the compress toggles (loaded in parallel).
+const prefsP = getSettings();
+const helperP = chrome.runtime.sendMessage({ to: 'sw', type: 'MG_HELPER_STATUS' }).then((r) => (r?.ok ? r.data : null), () => null);
 
 const SITE_NAMES = { reddit: 'Reddit', x: 'X', instagram: 'Instagram', tiktok: 'TikTok', facebook: 'Facebook' };
 
@@ -38,6 +54,20 @@ function render(posts) {
   }
   allBtn.hidden = items.length < 2;
   allBtn.textContent = `Download all (${items.length})`;
+  decorate();
+}
+
+// "≈ 48 MB · 7.8 Mbps" line (estimate before downloading), when the site tells us.
+function estLine(est) {
+  const line = el('div', 'est');
+  setEst(line, est);
+  return line;
+}
+function setEst(line, est) {
+  const parts = [];
+  if (est?.bytes) parts.push(`≈ ${fmtSize(est.bytes)}`);
+  if (est?.vkbps) parts.push(fmtRate(est.vkbps));
+  line.textContent = parts.join(' · ');
 }
 
 function renderItem(it) {
@@ -57,14 +87,55 @@ function renderItem(it) {
   const meta = el('div', 'meta');
   const n = it.count > 1 ? ` ${it.index + 1}/${it.count}` : '';
   meta.append(el('div', 'name', `${it.kind === 'video' ? 'Video' : 'Image'}${n}${it.label ? ' · ' + it.label : ''}`));
+  const est = estLine(it.est);
+  const chipSlot = el('div', 'chip-slot');
   const status = el('div', 'status', '');
-  meta.append(status);
-  rows.set(it.key, { status, kind: it.kind });
+  meta.append(est, chipSlot, status);
+  rows.set(it.key, { status, kind: it.kind, est, chipSlot, item: it });
   row.append(thumb, meta, saveButtons(() => download([it]), it.kind === 'video' ? () => download([it], 'audio') : null, it.kind));
   return row;
 }
 
-// Big square Save button, with a smaller Audio button to its right (videos only).
+// Compress toggle chip. Shown only when the helper (which does the encoding) is available.
+function makeChip(key, initialOn) {
+  compressState.set(key, { on: initialOn, touched: false });
+  const chip = el('button', 'chip');
+  const paint = () => {
+    const on = compressState.get(key).on;
+    chip.textContent = on ? '⇣ Compress to HEVC ✓' : '⇣ Compress to HEVC';
+    chip.setAttribute('aria-pressed', String(on));
+  };
+  chip.title = 'Re-encode to HEVC after saving (keeps the original if it saves too little)';
+  chip.onclick = () => {
+    const c = compressState.get(key);
+    c.on = !c.on;
+    c.touched = true;
+    paint();
+  };
+  chip.repaint = paint;
+  paint();
+  return chip;
+}
+
+// Once settings + helper status are known: flag over-limit videos and add the toggles.
+async function decorate() {
+  const [prefs, helper] = await Promise.all([prefsP, helperP]);
+  const canCompress = !!(helper?.installed && prefs.useHelper);
+  for (const [key, r] of rows) {
+    if (r.kind !== 'video' || !r.item) continue;
+    const over = overLimit(r.item.est, prefs);
+    if (over) {
+      r.est.classList.add('over');
+      r.est.title = 'Over your bitrate limit: worth compressing';
+    }
+    if (canCompress && !r.chipSlot.firstChild) {
+      // Pre-tick when over the limit; unknown bitrate + auto still lets the helper decide.
+      r.chipSlot.append(makeChip(key, prefs.autoCompress && over !== false));
+    }
+  }
+}
+
+// Big square Save button, with a slim full-height Audio button to its right (videos only).
 function saveButtons(onSave, onAudio, kind = 'video') {
   const btns = el('div', 'btns');
   const save = el('button', 'save');
@@ -85,8 +156,12 @@ function saveButtons(onSave, onAudio, kind = 'video') {
 }
 
 function download(list, mode = 'media') {
-  for (const it of list) setStatus(it.key, { state: 'queued', mode });
-  sw({ type: 'MG_DOWNLOAD', items: list, mode });
+  const compress = {};
+  for (const it of list) {
+    setStatus(it.key, { state: 'queued', mode });
+    if (mode === 'media' && compressMode(it.key)) compress[it.key] = compressMode(it.key);
+  }
+  sw({ type: 'MG_DOWNLOAD', items: list, mode, compress });
 }
 
 const TEXT = {
@@ -94,12 +169,11 @@ const TEXT = {
   downloading: (j) => `Downloading${j.pct ? ` ${j.pct}%` : '…'}`,
   merging: (j) => (j.mode === 'audio' ? 'Extracting…' : 'Merging video + audio…'),
   saving: () => 'Saving…',
+  compressing: (j) => `Compressing to HEVC${j.pct ? ` ${j.pct}%` : '…'}`,
   done: (j) => (j.warning ? `Saved, but ${j.warning}` : 'Saved ✓'),
   error: (j) => `Failed: ${j.error}`,
   cancelled: () => 'Cancelled',
 };
-
-const fmtSize = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${Math.round(n / 1e3)} KB` : `${n} B`);
 
 // Open (▶ / ↗) or show-in-folder (📁) a saved file: Chrome downloads directly from the
 // popup (needs the click), helper saves through the helper.
@@ -142,6 +216,7 @@ function setStatus(key, j) {
   const done = j.state === 'done';
   let text = (j.via === 'yt-dlp' ? 'yt-dlp · ' : '') + (j.mode === 'audio' ? 'Audio: ' : '') + (TEXT[j.state] || (() => j.state))(j);
   if (done && j.size) text += ` · ${fmtSize(j.size)}`;
+  if (done && j.note) text += ` · ${j.note}`;
   s.replaceChildren(el('span', '', text));
   if (done && (j.path || j.downloadId != null)) s.append(fileButtons(j, r.kind));
   s.className = 'status' + (j.state === 'error' ? ' err' : done ? (j.warning ? ' warn' : ' ok') : '');
@@ -167,11 +242,12 @@ const domainOf = (url) => new URL(url).hostname.split('.').slice(-2).join('.');
 
 function ytdlp(url, audio, key, height = null) {
   // Cookie access for this site (asked once per site; must run inside the click).
+  const compress = audio ? null : compressMode(key);
   chrome.permissions.request({ origins: [`*://*.${domainOf(url)}/*`] })
     .catch(() => false)
     .finally(() => {
       setStatus(key, { state: 'queued', via: 'yt-dlp', mode: audio ? 'audio' : 'media' });
-      sw({ type: 'MG_YTDLP', url, audio, key, height });
+      sw({ type: 'MG_YTDLP', url, audio, key, height, compress });
     });
 }
 
@@ -179,13 +255,16 @@ const STANDARD = [2160, 1440, 1080, 720, 480, 360];
 const qLabel = (h) => `${h}p${h >= 2160 ? ' (4K)' : h >= 1440 ? ' (2K)' : ''}`;
 
 // Fill the quality dropdown: preselect the remembered quality, or the highest one below it.
-async function fillQualities(sel, hint, url) {
-  const [store, r] = await Promise.all([
+// Also shows the size/bitrate estimate for the selected quality and pre-ticks compression.
+async function fillQualities(sel, hint, est, chip, key, url) {
+  const [store, r, prefs] = await Promise.all([
     chrome.storage.local.get('ytQuality').catch(() => ({})),
     sw({ type: 'MG_YTDLP_PROBE', url }).catch((e) => ({ ok: false, error: e.message })),
+    prefsP,
   ]);
   const preferred = Number(store.ytQuality) || 0; // 0 = best available
   const found = r?.ok ? r.data.qualities : [];
+  const estimates = (r?.ok && r.data.estimates) || {};
   const list = found.length ? found : STANDARD;
   sel.replaceChildren(...list.map((h) => new Option(qLabel(h), String(h))));
   let pick = list[0];
@@ -196,13 +275,23 @@ async function fillQualities(sel, hint, url) {
   sel.value = String(pick);
   sel.disabled = false;
   if (!found.length) hint.textContent = r?.ok ? 'No video qualities listed; yt-dlp will pick the closest.' : `Couldn't list qualities: ${r?.error || 'unknown error'}`;
+  const showEst = () => {
+    const e = estimates[sel.value];
+    setEst(est, e);
+    const over = overLimit(e, prefs);
+    est.classList.toggle('over', !!over);
+    const c = compressState.get(key);
+    if (c && !c.touched) { c.on = !!(prefs.autoCompress && over !== false); chip?.repaint(); }
+  };
+  showEst();
   sel.onchange = () => {
     hint.textContent = '';
     chrome.storage.local.set({ ytQuality: Number(sel.value) }).catch(() => {});
+    showEst();
   };
 }
 
-function renderYtdlp(tab, helper) {
+async function renderYtdlp(tab, helper) {
   const box = el('section', 'post');
   const head = el('div', 'post-h');
   head.append(el('span', 'site', 'yt-dlp'), el('span', 'author', new URL(tab.url).hostname.replace(/^www\./, '')));
@@ -227,10 +316,15 @@ function renderYtdlp(tab, helper) {
   sel.disabled = true;
   sel.append(new Option('Finding qualities…', ''));
   const hint = el('div', 'hint', '');
+  const est = el('div', 'est', '');
+  const chipSlot = el('div', 'chip-slot');
   const status = el('div', 'status', '');
-  meta.append(sel, hint, status);
+  meta.append(sel, hint, est, chipSlot, status);
   rows.set(key, { status, kind: 'video' });
-  fillQualities(sel, hint, tab.url);
+  const prefs = await prefsP;
+  const chip = prefs.useHelper ? makeChip(key, false) : null;
+  if (chip) chipSlot.append(chip);
+  fillQualities(sel, hint, est, chip, key, tab.url);
   row.append(el('div', 'thumb', '▶'), meta, saveButtons(
     () => ytdlp(tab.url, false, key, sel.value ? Number(sel.value) : null),
     () => ytdlp(tab.url, true, key),
@@ -249,8 +343,7 @@ function renderYtdlp(tab, helper) {
     render(res.data.posts); // native sites never fall back to yt-dlp
   } else if (/^https?:/.test(tab.url || '')) {
     listEl.replaceChildren();
-    const helper = await sw({ type: 'MG_HELPER_STATUS' }).catch(() => null);
-    renderYtdlp(tab, helper?.ok ? helper.data : null);
+    await renderYtdlp(tab, await helperP);
   } else {
     showMessage('Open a page with a video to download it.');
   }

@@ -131,9 +131,11 @@
     const rv = src.secure_media?.reddit_video || src.media?.reddit_video;
 
     if (rv) {
+      const hasAudio = rv.has_audio !== false && !rv.is_gif;
       raw.push({
         kind: 'video',
         label: rv.height ? `${rv.height}p` : '',
+        est: MG.est({ vbps: (rv.bitrate_kbps || 0) * 1000, abps: hasAudio ? 128000 : 0, w: rv.width, h: rv.height, dur: rv.duration }),
         thumb,
         source: { type: 'reddit', dash: rv.dash_url, fallback: rv.fallback_url, hasAudio: rv.has_audio !== false && !rv.is_gif },
       });
