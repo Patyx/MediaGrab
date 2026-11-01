@@ -65,27 +65,6 @@ Then open MediaGrab's settings (⚙ in the popup) and click **Check again**. It 
 
 The extension has a fixed ID (`akdihefcbbgbeokfllakmflnelonapfa`, set by the public `key` in `manifest.json`), so the helper keeps recognising it wherever the folder lives.
 
-## Library Scanner (helper)
-
-Which of the videos you already have are worth re-encoding? The scanner answers that without compressing everything first. It's a small local web app installed with the helper: open **Start Menu → MediaGrab Library Scanner** and it opens in your browser (on `127.0.0.1` only, with a per-session token, so nothing else can reach it).
-
-<p align="center">
-  <img src="docs/screenshots/scanner-results.png" width="760" alt="Library Scanner results table ranked by GB saved per hour of encoding">
-</p>
-
-- **Scan** a folder, with or without subfolders. By default it takes `.mp4 .mkv .mov .webm` files of at least 50 MB and skips files already ending in `_comp`. **Estimate job** counts the files and total size, and estimates how long the analysis will take before you start.
-- **How it measures:** for each file it reads the bitrate along the whole video (no decoding) and picks sample windows from the quiet, typical and busiest parts: 3 samples for videos under 5 minutes, 5 for longer ones, 6 seconds each. It encodes those samples with exactly the encoder and quality you compress with, and predicts the compressed size from them. Short clips are encoded whole. Files that are already efficient HEVC / AV1 / VP9 are skipped. It optionally measures **VMAF** quality on the samples too (the score, and the worst sample).
-- **Results** are ranked by **GB saved per hour of encoding** by default, so the cheapest big wins come first. You can also sort by GB saved, % saved, size, predicted size, bitrate, bits per pixel, VMAF, encode time, duration, sample spread or name. Tick files (or **Select top N**) and **Compress selected**. The original goes to the **Recycle Bin** by default (or is kept / deleted, set in Settings), and the same 15% minimum-savings rule applies.
-- **Encode time** is frames ÷ your encoder's speed per resolution. The defaults are estimates for an **RTX 5070** with HEVC NVENC at its slowest, most efficient preset (480p 800, 720p 480, 1080p 240, 1440p 140, 4K 65 fps). After a scan, Settings shows the median speeds measured on your PC, and **Use measured speeds** copies them in.
-- **Settings** cover the file filters, sampling, VMAF, efficient-file skip, encoder, quality, bitrate caps, audio re-encode and what happens to originals. Results are cached (by path, size, date and settings), so re-scanning a folder only analyses new or changed files. Results made with different settings are marked *outdated*.
-
-Troubleshooting logs: `%LOCALAPPDATA%\MediaGrab\scan.log`, `last-scan-sample.log` and `last-scan-vmaf.log`.
-
-<p align="center">
-  <img src="docs/screenshots/scanner-scan.png" width="760" alt="Library Scanner scan tab with progress">
-  <img src="docs/screenshots/scanner-settings.png" width="760" alt="Library Scanner settings tab with the encode speed table">
-</p>
-
 ## Settings
 
 <img src="docs/screenshots/settings.png" width="560" alt="MediaGrab settings page">
@@ -111,7 +90,7 @@ service worker ──► offscreen document: fetch → DASH / HLS → mp4mux.js 
 | `lib/dash.js`, `lib/hls.js`, `lib/pick.js` | Stream manifest parsing and quality selection. |
 | `offscreen.js` | Fetching, merging, and handing finished files back. |
 | `background.js` | Service worker: popup/context-menu routing, jobs, saving. |
-| `helper/` | Windows native messaging host (PowerShell), the Library Scanner (`mediagrab-scan.ps1` + `scan-ui.html`) and the installer. |
+| `helper/` | Windows native messaging host (PowerShell) and its installer. |
 
 ## Known limits
 

@@ -17,8 +17,7 @@ $Bin = Join-Path $Root 'bin'
 $null = New-Item -ItemType Directory -Force -Path $HelperDir, $Bin
 
 Write-Host "Installing MediaGrab Helper to $HelperDir" -ForegroundColor Cyan
-$files = 'mediagrab-host.ps1', 'mediagrab-host.bat', 'mediagrab-scan.ps1', 'scan-ui.html', 'MediaGrab Library Scanner.bat'
-Copy-Item -LiteralPath ($files | ForEach-Object { Join-Path $PSScriptRoot $_ }) -Destination $HelperDir -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'mediagrab-host.ps1'), (Join-Path $PSScriptRoot 'mediagrab-host.bat') -Destination $HelperDir -Force
 Get-ChildItem -LiteralPath $HelperDir | Unblock-File
 
 if (-not $SkipTools) {
@@ -65,19 +64,6 @@ $manifest = [ordered]@{
 $key = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName"
 $null = New-Item -Path $key -Force
 Set-ItemProperty -Path $key -Name '(default)' -Value $manifestPath
-
-# Start Menu shortcut for the Library Scanner.
-try {
-  $lnkPath = Join-Path ([Environment]::GetFolderPath('Programs')) 'MediaGrab Library Scanner.lnk'
-  $ws = New-Object -ComObject WScript.Shell
-  $lnk = $ws.CreateShortcut($lnkPath)
-  $lnk.TargetPath = Join-Path $HelperDir 'MediaGrab Library Scanner.bat'
-  $lnk.WorkingDirectory = $HelperDir
-  $lnk.WindowStyle = 7
-  $lnk.Description = 'Rank your videos by how much HEVC compression would save'
-  $lnk.Save()
-  Write-Host 'Added Start Menu shortcut: MediaGrab Library Scanner'
-} catch { Write-Host "Could not create the Start Menu shortcut: $_" -ForegroundColor Yellow }
 
 Write-Host ''
 Write-Host 'Done.' -ForegroundColor Green
