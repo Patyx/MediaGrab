@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$Version = '1.5.3'
+$Version = '1.6.0'
 $null = Add-Type -AssemblyName System.Windows.Forms
 $null = Add-Type -AssemblyName System.Drawing
 
@@ -192,6 +192,7 @@ function Invoke-Tool([string]$exe, [string[]]$argv, [scriptblock]$onLine) {
   $psi.EnvironmentVariables['PYTHONUTF8'] = '1'
   $psi.EnvironmentVariables['PATH'] = $env:Path
   $p = [Diagnostics.Process]::Start($psi)
+  if ($script:currentRid) { Send @{ rid = $script:currentRid; event = 'progress'; pid = $p.Id } }
   $errTask = $p.StandardError.ReadToEndAsync()
   $aborted = $false
   while ($null -ne ($line = $p.StandardOutput.ReadLine())) {
@@ -219,6 +220,7 @@ function Invoke-Ffmpeg([string]$exe, [string[]]$argv, [scriptblock]$onLine, [str
   $psi.CreateNoWindow = $true
   $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
   $p = [Diagnostics.Process]::Start($psi)
+  if ($script:currentRid) { Send @{ rid = $script:currentRid; event = 'progress'; pid = $p.Id } }
   $outTask = $p.StandardOutput.ReadToEndAsync()
   $log = $null
   try { $log = New-Object IO.StreamWriter($logPath, $false, [Text.Encoding]::UTF8); $log.AutoFlush = $true; $log.WriteLine("ffmpeg $($psi.Arguments)") } catch {}
@@ -244,7 +246,7 @@ function Invoke-Ffmpeg([string]$exe, [string[]]$argv, [scriptblock]$onLine, [str
   $p.WaitForExit()
   if ($log) { $log.WriteLine("exit $($p.ExitCode)$(if ($aborted) { ' (stopped early)' })"); $log.Dispose() }
   $null = $outTask.Result
-  return @{ code = $p.ExitCode; err = $err.ToString(); aborted = $aborted }
+  return @{ code = $p.ExitCode; err = $err.ToString(); aborted = $aborted; pid = $p.Id }
 }
 
 function Get-YtdlpError([string]$err) {
@@ -360,7 +362,14 @@ function Invoke-Download($m) {
     if ($r.code -ne 0 -and $cf -and (Test-FormatError $r.err)) {
       $r = Invoke-Ytdlp (Remove-CookieArgs $argv) $onLine
     }
-    if ($r.code -ne 0) { throw ((Get-YtdlpError $r.err) + (Get-YoutubeHint $r.err)) }
+    if ($r.code -ne 0) {
+      # Cancelled or failed: remove yt-dlp's partial files for this download.
+      $leaf = [IO.Path]::GetFileName($stem)
+      Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name.StartsWith($leaf) -and $_.Name -match '\.(part|ytdl)$|\.part-Frag\d+' } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+      throw ((Get-YtdlpError $r.err) + (Get-YoutubeHint $r.err))
+    }
     $final = "$stem.$ext"
     if (-not (Test-Path -LiteralPath $final)) {
       $hit = Get-ChildItem -LiteralPath $dir -File | Where-Object { $_.BaseName -eq [IO.Path]::GetFileName($stem) } |
@@ -428,28 +437,60 @@ function Get-Probe([string]$path) {
     if ($num -gt 0 -and $den -gt 0) { $frames = [int64]($dur * $num / $den) }
   }
   $audioBytes = [math]::Max(0, $size - $vbr / 8 * $dur)
-  return @{ codec = [string]$s.codec_name; w = [int]$s.width; h = [int]$s.height; vkbps = [int][math]::Round($vbr / 1000); dur = $dur; size = $size; frames = $frames; audioBytes = $audioBytes }
+  # Audio stream bitrate (0 = no audio).
+  $akbps = 0
+  $outA = New-Object Collections.Generic.List[string]
+  $ra = Invoke-Tool $ffprobe @('-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name,bit_rate', '-of', 'json', $path) { param($l) $outA.Add($l) }
+  if ($ra.code -eq 0) {
+    $sa = @((($outA -join "`n") | ConvertFrom-Json).streams)[0]
+    if ($sa) {
+      if ($sa.bit_rate) { $akbps = [int]([double]$sa.bit_rate / 1000) }
+      elseif ($dur -gt 0) { $akbps = [int]($audioBytes * 8 / $dur / 1000) }
+    }
+  }
+  return @{ codec = [string]$s.codec_name; w = [int]$s.width; h = [int]$s.height; vkbps = [int][math]::Round($vbr / 1000); dur = $dur; size = $size; frames = $frames; audioBytes = $audioBytes; akbps = $akbps }
 }
 
 # Bitrate limit (kbps) for a resolution: a curve through the 720p and 1080p settings.
-function Get-LimitKbps([int]$short, [double]$a720, [double]$a1080) {
+# Bitrate limit (kbps) for a resolution (short side): a log-log curve through the 720p,
+# 1080p and 4K settings; below 720p the 720-1080 slope continues.
+function Get-LimitKbps([int]$short, [double]$a720, [double]$a1080, [double]$a2160) {
   if ($a720 -le 0 -or $a1080 -le $a720) { $a720 = 3000; $a1080 = 5000 }
-  $k2 = 2 * [math]::Log($a1080 / $a720) / [math]::Log(2.25)
-  return $a1080 * [math]::Pow([math]::Max(144, $short) / 1080.0, $k2)
+  if ($a2160 -le $a1080) { $a2160 = 8000 }
+  $s = [math]::Max(144, $short)
+  if ($s -le 1080) {
+    $k = [math]::Log($a1080 / $a720) / [math]::Log(1080 / 720.0)
+  } else {
+    $k = [math]::Log($a2160 / $a1080) / [math]::Log(2.0)
+  }
+  return $a1080 * [math]::Pow($s / 1080.0, $k)
 }
 
 # Quality value per encoder for each preset (lower = better quality, bigger file).
 # Order: max, high, balanced, small, smaller, tiny.
+# $level: a step on the x265 CRF scale (20 = max ... 32 = tiny) or a preset name.
+# GPU values are interpolated between the preset anchors.
 function Get-Quality([string]$enc, [string]$level) {
-  $i = @{ max = 0; high = 1; balanced = 2; small = 3; smaller = 4; tiny = 5 }[$level]
-  if ($null -eq $i) { $i = 2 }
+  $names = @{ max = 20; high = 22; balanced = 24; small = 27; smaller = 29; tiny = 32 }
+  $x = 24.0
+  if ($names.ContainsKey($level)) { $x = [double]$names[$level] }
+  elseif (-not [double]::TryParse($level, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$x)) { $x = 24.0 }
+  $x = [math]::Max(20, [math]::Min(32, $x))
+  $ax = @(20, 22, 24, 27, 29, 32)
   $t = @{
     x265  = @(20, 22, 24, 27, 29, 32)
     nvenc = @(22, 24, 27, 30, 32, 35)
     qsv   = @(20, 22, 25, 28, 30, 33)
     amf   = @(20, 22, 25, 28, 30, 33)
   }[$enc]
-  return $t[$i]
+  if (-not $t) { $t = $ax }
+  for ($i = 0; $i -lt 5; $i++) {
+    if ($x -le $ax[$i + 1]) {
+      $v = $t[$i] + ($t[$i + 1] - $t[$i]) * ($x - $ax[$i]) / ($ax[$i + 1] - $ax[$i])
+      return [int][math]::Round($v, [MidpointRounding]::AwayFromZero)
+    }
+  }
+  return $t[5]
 }
 
 # ffmpeg video encoder arguments. GPU encoders use their slowest, most efficient presets
@@ -519,8 +560,13 @@ function Invoke-Compress($m) {
     $probe = Get-Probe $in
     $short = [math]::Min($probe.w, $probe.h)
     if ($short -le 0) { $short = [math]::Max($probe.w, $probe.h) }
-    $limit = [int](Get-LimitKbps $short ([double]$m.limit720) ([double]$m.limit1080))
-    $base = @{ rid = $m.rid; event = 'compressed'; vkbps = $probe.vkbps; limit = $limit; origSize = $probe.size }
+    $limit = [int](Get-LimitKbps $short ([double]$m.limit720) ([double]$m.limit1080) ([double]$m.limit2160))
+    # Audio above the limit is re-encoded to AAC at the target bitrate (with the video).
+    $aLimit = $(if ([double]$m.audioLimit -gt 0) { [double]$m.audioLimit } else { 200 })
+    $aTarget = $(if ([int]$m.audioTarget -gt 0) { [int]$m.audioTarget } else { 128 })
+    $reAudio = ($m.audioCompress -ne $false) -and $probe.akbps -gt $aLimit
+    $base = @{ rid = $m.rid; event = 'compressed'; vkbps = $probe.vkbps; limit = $limit; origSize = $probe.size
+      akbps = $probe.akbps; reAudio = $reAudio; audioTarget = $aTarget }
     if ($m.mode -eq 'auto' -and $probe.vkbps -le $limit) {
       Move-Result $in $outPath
       Send ($base + @{ path = $outPath; size = $probe.size; outcome = 'under-limit' })
@@ -542,7 +588,8 @@ function Invoke-Compress($m) {
     # The compressed file is saved next to the original's name with "_comp" appended.
     $compPath = Get-UniquePath ([IO.Path]::Combine([IO.Path]::GetDirectoryName($outPath), [IO.Path]::GetFileNameWithoutExtension($outPath) + '_comp.mp4'))
     $state = @{ last = -1; dur = $probe.dur; frames = [double]$probe.frames; f = 0.0; t = 0.0; bytes = 0.0; kbps = 0
-      orig = [double]$probe.size; audio = [double]$probe.audioBytes; min = [double]$m.minSavings; projected = 0.0; sent = 0 }
+      orig = [double]$probe.size; min = [double]$m.minSavings; projected = 0.0; sent = 0
+      audio = $(if ($reAudio) { $aTarget * 1000 / 8 * $probe.dur } else { [double]$probe.audioBytes }) }
     $onLine = {
       param($l)
       if ($l -match '^frame=\s*(\d+)\s+fps=') {
@@ -581,7 +628,8 @@ function Invoke-Compress($m) {
     $encode = {
       param($enc, $tr)
       $q = Get-Quality $enc ([string]$m.quality)
-      $argv = @('-hide_banner', '-nostdin', '-y', '-v', 'error', '-i', $in, '-map', '0:v:0', '-map', '0:a?', '-c:a', 'copy') +
+      $audioArgs = $(if ($reAudio) { @('-c:a', 'aac', '-b:a', "${aTarget}k") } else { @('-c:a', 'copy') })
+      $argv = @('-hide_banner', '-nostdin', '-y', '-v', 'error', '-i', $in, '-map', '0:v:0', '-map', '0:a?') + $audioArgs +
         (Get-EncoderArgs $enc $q $cap $tr ([string]$m.x265Preset)) +
         @('-tag:v', 'hvc1', '-movflags', '+faststart', '-map_metadata', '0', '-stats', '-stats_period', '0.5', '-progress', 'pipe:2', $tmp)
       return Invoke-Ffmpeg $ff $argv $onLine (Join-Path $Root 'last-compress.log')
@@ -592,13 +640,27 @@ function Invoke-Compress($m) {
       $proj = [math]::Round((1 - $state.projected / $state.orig) * 100)
       Send ($base + @{ path = $outPath; size = $probe.size; outcome = 'aborted'; savedPct = $proj; encoder = $choice })
     }
+    $wasCancelled = {
+      param($res)
+      $mark = Join-Path $Root "cancel-$($res.pid)"
+      if (-not (Test-Path -LiteralPath $mark)) { return $false }
+      Remove-Item -LiteralPath $mark -Force -ErrorAction SilentlyContinue
+      return $true
+    }
+    $cancelResult = {
+      Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+      Move-Result $in $outPath
+      Send ($base + @{ path = $outPath; size = $probe.size; outcome = 'cancelled' })
+    }
     $r = & $encode $choice $tier
+    if (& $wasCancelled $r) { & $cancelResult; return }
     if ($r.aborted) { & $abortResult; return }
     if ($r.code -ne 0 -and $choice -ne 'x265') {
       # GPU encoder failed on this file: fall back to the CPU.
       Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
       $choice = 'x265'
       $r = & $encode 'x265' $null
+      if (& $wasCancelled $r) { & $cancelResult; return }
       if ($r.aborted) { & $abortResult; return }
     }
     if ($r.code -ne 0) {
@@ -686,6 +748,16 @@ function Invoke-HostCommand($m) {
     'ytdlp-update' { Invoke-Update $m }
     'compress' { Invoke-Compress $m }
     'encoders' { Send @{ rid = $m.rid; event = 'encoders'; encoders = (Get-Encoders ([bool]$m.force)) } }
+    'kill' {
+      # Stop a running ffmpeg / yt-dlp (and its children) started by a MediaGrab Helper.
+      $proc = Get-Process -Id ([int]$m.pid) -ErrorAction SilentlyContinue
+      if ($proc -and $proc.ProcessName -match '^(ffmpeg|ffprobe|yt-dlp|deno)$') {
+        # Marker so the waiting helper treats the exit as a cancel (no CPU retry).
+        try { [IO.File]::WriteAllText((Join-Path $Root "cancel-$([int]$m.pid)"), '') } catch {}
+        $null = Invoke-Tool (Join-Path $env:WINDIR 'System32\taskkill.exe') @('/PID', [string]$m.pid, '/T', '/F') $null
+      }
+      Send @{ rid = $m.rid; event = 'killed' }
+    }
     'open-file' {
       $p = [string]$m.path
       if (-not ($p -and (Test-Path -LiteralPath $p -PathType Leaf))) { throw 'File not found (moved or deleted?)' }
@@ -718,7 +790,9 @@ while ($true) {
     } else {
       $m = $raw | ConvertFrom-Json
       $rid = $m.rid
+      $script:currentRid = $rid
       $null = Invoke-HostCommand $m
+      $script:currentRid = $null
     }
   } catch {
     Send @{ rid = $rid; event = 'error'; error = $_.Exception.Message }

@@ -1,7 +1,8 @@
 // Service worker: context menu, job queue, chrome.downloads, and the bridge between
 // popup, content scripts, the offscreen document and the optional Windows helper.
 import { getSettings as loadSettings, buildName, cleanFolder } from './lib/settings.js';
-import { helperOutdated, helperStatus, helperSave, ytdlpDownload, ytdlpUpdate, ytdlpProbe, cookiesFor, helperOpenFolder, helperOpenFile, helperCompress, helperEncoders } from './lib/helper.js';
+import { helperOutdated, helperStatus, helperSave, ytdlpDownload, ytdlpUpdate, ytdlpProbe, cookiesFor, helperOpenFolder, helperOpenFile, helperCompress, helperEncoders, helperKill } from './lib/helper.js';
+import { normalizeQuality } from './lib/compress.js';
 import { fmtSize, fmtRate } from './lib/compress.js';
 
 // Settings are read on every job; cache them until they change.
@@ -53,6 +54,9 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === 'update') {
     chrome.storage.sync.get(['descLength', 'descLength45']).then((s) => {
       if (!s.descLength45) chrome.storage.sync.set({ descLength45: true, ...(Number(s.descLength) === 30 ? { descLength: 45 } : {}) });
+    }).catch(() => {});
+    chrome.storage.sync.get('quality').then(({ quality }) => {
+      if (quality != null && String(normalizeQuality(quality)) !== String(quality)) chrome.storage.sync.set({ quality: String(normalizeQuality(quality)) });
     }).catch(() => {});
   }
   chrome.contextMenus.removeAll(() => {
@@ -179,7 +183,7 @@ function upsert(m) {
 
 function fail(j, e) {
   j.at = Date.now();
-  if (isCancel(e)) {
+  if (isCancel(e) || j.cancelRequested) {
     j.state = 'cancelled';
     return;
   }
@@ -232,6 +236,7 @@ async function deliver(j, url, ext) {
       const saved = await helperSave({
         url, name: j.name, ext: wantMp3 ? 'mp3' : ext, group: j.group,
         convert: wantMp3 ? 'mp3' : null, stage: compress, mp3Quality: prefs.mp3Quality,
+        isCancelled: () => !!j.cancelRequested,
       });
       revoke(j);
       if (compress && !saved.staged) j.warning = 'not compressed: the helper did not hand the file over for compression (run helper\\install.bat again)';
@@ -268,14 +273,22 @@ async function runCompress(j, input, output) {
   try {
     r = await helperCompress({
       input, output, mode: j.compress === 'force' ? 'force' : 'auto',
-      limit720: prefs.limit720, limit1080: prefs.limit1080, encoder: prefs.encoder,
-      quality: prefs.quality, x265Preset: prefs.x265Preset, minSavings: prefs.minSavings,
-    }, (ev) => { j.pct = ev.pct; j.kbps = ev.kbps || 0; pushStatus(); });
+      limit720: prefs.limit720, limit1080: prefs.limit1080, limit2160: prefs.limit2160, encoder: prefs.encoder,
+      quality: String(normalizeQuality(prefs.quality)), x265Preset: prefs.x265Preset, minSavings: prefs.minSavings,
+      audioCompress: prefs.audioCompress !== false, audioLimit: prefs.audioLimit, audioTarget: prefs.audioTarget,
+    }, (ev) => {
+      if (ev.pid) j.pid = ev.pid;
+      if (ev.pct != null) { j.pct = ev.pct; j.kbps = ev.kbps || 0; }
+      pushStatus();
+    });
+    j.pid = null;
   } catch (e) {
     j.warning = `compression failed (${e.message}); the original may still be named "${input}"`;
     return { path: input, size: null };
   }
-  if (r.outcome === 'compressed') j.note = `HEVC ${100 - r.savedPct}% (was ${fmtSize(r.origSize)})`;
+  const audioNote = r.reAudio ? ` · audio ${r.akbps}→${r.audioTarget} kbps` : '';
+  if (r.outcome === 'compressed') j.note = `HEVC ${100 - r.savedPct}% (was ${fmtSize(r.origSize)})${audioNote}`;
+  else if (r.outcome === 'cancelled') j.note = 'compression cancelled, kept the original';
   else if (r.outcome === 'kept') j.note = `kept original: HEVC only saved ${r.savedPct}%`;
   else if (r.outcome === 'aborted') j.note = `kept original: stopped early, HEVC would only save ~${Math.max(0, r.savedPct)}%`;
   else if (r.outcome === 'under-limit') j.note = `kept original: ${fmtRate(r.vkbps)} is under the ${fmtRate(r.limit)} limit`;
@@ -319,7 +332,11 @@ async function runYtdlp(j, { url, audio, height = null, info = null }) {
       playlistItem: null,
       group: j.group,
       makeName,
-      onProgress: (pct) => { j.pct = pct; pushStatus(); },
+      onProgress: (ev) => {
+        if (ev.pid) j.pid = ev.pid;
+        if (ev.pct != null) j.pct = ev.pct;
+        pushStatus();
+      },
     });
     if (j.compress && !audio && /\.mp4$/i.test(saved.path || '')) saved = await runCompress(j, saved.path, saved.path);
     finish(j, saved);
@@ -345,6 +362,7 @@ async function startJob(item, mode = 'media', group = null, compress = null) {
       await deliver(j, s.urls[0], s.ext);
     } else {
       await ensureOffscreen();
+      if (j.cancelRequested) throw new Error('cancelled');
       j.state = 'downloading';
       await chrome.runtime.sendMessage({ to: 'offscreen', type: 'MG_JOB', jobId: j.jobId, item, prefs, mode, name, compress: j.compress });
     }
@@ -400,6 +418,18 @@ const handlers = {
     return r.data;
   },
   // Compress a video that was already saved (the user changed their mind afterwards).
+  // Red ✕ in the popup: stop whatever this job is doing right now.
+  async MG_CANCEL({ jobId }) {
+    const j = jobs.get(jobId);
+    if (!j || FINISHED.has(j.state)) return;
+    j.cancelRequested = true;
+    if (j.downloadId != null) await chrome.downloads.cancel(j.downloadId).catch(() => {});
+    if (j.pid) await helperKill(j.pid).catch(() => {}); // yt-dlp or ffmpeg
+    if (j.state === 'downloading' || j.state === 'merging' || j.state === 'queued') {
+      chrome.runtime.sendMessage({ to: 'offscreen', type: 'MG_ABORT', jobId }).catch(() => {});
+    }
+    if (j.state === 'queued' && !j.pid) { fail(j, 'cancelled'); pushStatus(); }
+  },
   async MG_COMPRESS_FILE({ key, path }) {
     if (!path) throw new Error('No saved file to compress');
     const j = upsert({ jobId: crypto.randomUUID(), key, name: null, mode: 'media' });
@@ -488,7 +518,8 @@ const handlers = {
     pushStatus();
   },
   MG_JOB_ERROR(m) {
-    fail(upsert(m), m.error);
+    const j = upsert(m);
+    fail(j, j.cancelRequested ? 'cancelled' : m.error);
     pushStatus();
   },
 };

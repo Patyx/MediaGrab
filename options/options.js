@@ -1,5 +1,5 @@
 import { DEFAULTS, getSettings, buildName } from '../lib/settings.js';
-import { limitKbps, encoderName, QUALITY, qualityLabel } from '../lib/compress.js';
+import { limitKbps, encoderName, QUALITY, qualityLabel, normalizeQuality } from '../lib/compress.js';
 import { helperOutdated, MIN_HELPER } from '../lib/helper.js';
 
 const $ = (id) => document.getElementById(id);
@@ -24,8 +24,8 @@ function refresh(s) {
   $('preview').textContent = `${buildName(sample, s)}.mp4`;
   $('folderRow').setAttribute('aria-disabled', String(s.saveAs));
   $('folder').disabled = s.saveAs;
-  const lim = (h) => Math.round(limitKbps(h, s.limit720, s.limit1080) / 100) * 100;
-  $('limitPreview').textContent = `Videos above these bitrates count as "worth compressing". Other resolutions follow the same curve: 480p ${lim(480)} · 1440p ${lim(1440)} · 4K ${lim(2160)} kbps.`;
+  const lim = (h) => Math.round(limitKbps(h, s.limit720, s.limit1080, s.limit2160) / 100) * 100;
+  $('limitPreview').textContent = `Videos above these bitrates count as "worth compressing". In between, the curve through these three points gives: 480p ${lim(480)} · 1440p ${lim(1440)} kbps.`;
 }
 
 async function save() {
@@ -37,8 +37,12 @@ async function save() {
   savedTimer = setTimeout(() => { $('saved').hidden = true; }, 1200);
 }
 
+// All quality steps (x265 CRF scale 20..32); labels are filled by relabelQuality().
+for (const level of QUALITY.levels) $('quality').append(new Option(String(level), String(level)));
+
 (async () => {
   const s = await getSettings();
+  s.quality = String(normalizeQuality(s.quality)); // old preset names -> step
   for (const k of fields) {
     const el = $(k);
     if (!el) continue;
@@ -58,9 +62,7 @@ let detected = null;
 function relabelQuality() {
   const choice = $('encoder').value;
   const enc = choice !== 'auto' ? choice : (['nvenc', 'qsv', 'amf'].find((k) => detected?.[k]) || 'x265');
-  for (const opt of $('quality').options) {
-    if (QUALITY.presets.includes(opt.value)) opt.textContent = qualityLabel(opt.value, enc);
-  }
+  for (const opt of $('quality').options) opt.textContent = qualityLabel(opt.value, enc);
 }
 
 // Which HEVC encoders work on this PC (the helper test-encodes once and caches it).

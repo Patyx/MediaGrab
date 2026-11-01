@@ -10,6 +10,7 @@ const send = (msg) => chrome.runtime.sendMessage({ to: 'sw', ...msg }).catch(() 
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.to !== 'offscreen') return;
+  if (msg.type === 'MG_ABORT') { controllers.get(msg.jobId)?.abort(); sendResponse({ ok: true }); return; }
   if (msg.type === 'MG_SIZE') {
     itemSize(msg.item, msg.prefs || {}).then(
       (data) => sendResponse({ ok: true, data }),
@@ -27,8 +28,14 @@ const EXT = {
   'image/webp': 'webp', 'image/gif': 'gif', 'image/heic': 'heic', 'image/avif': 'avif',
 };
 
+// Running jobs' abort handles (the popup's red ✕).
+const controllers = new Map();
+
 async function runJob(jobId, item, prefs, mode, name, compress = null) {
   const ids = { jobId, key: item.key, mode, name, compress };
+  const ctl = new AbortController();
+  const sig = ctl.signal;
+  controllers.set(jobId, ctl);
   try {
     const plan = await resolve(item.source, prefs);
     const progress = makeProgress(ids, plan.video && plan.audio && mode !== 'audio' ? 2 : 1);
@@ -37,14 +44,14 @@ async function runJob(jobId, item, prefs, mode, name, compress = null) {
     let warning = '';
 
     if (mode === 'audio') {
-      const r = await getBytes(plan.audio || plan.video || plan.single, progress(0));
+      const r = await getBytes(plan.audio || plan.video || plan.single, progress(0), false, sig);
       send({ type: 'MG_JOB_PROGRESS', ...ids, state: 'merging', pct: 100 });
       blob = extractAudio(r.bytes);
       ext = 'm4a';
     } else if (plan.video) {
       const [v, a] = await Promise.all([
-        getBytes(plan.video, progress(0)),
-        plan.audio ? getBytes(plan.audio, progress(1), true) : null,
+        getBytes(plan.video, progress(0), false, sig),
+        plan.audio ? getBytes(plan.audio, progress(1), true, sig) : null,
       ]);
       if (plan.audio && !a) warning = 'no audio track found, saved without sound';
       send({ type: 'MG_JOB_PROGRESS', ...ids, state: 'merging', pct: 100 });
@@ -57,14 +64,17 @@ async function runJob(jobId, item, prefs, mode, name, compress = null) {
       }
       ext = 'mp4';
     } else {
-      const r = await getBytes(plan.single, progress(0));
+      const r = await getBytes(plan.single, progress(0), false, sig);
       ext = EXT[r.type] || ext;
       blob = new Blob([r.bytes], { type: r.type || 'application/octet-stream' });
     }
+    if (sig.aborted) throw new Error('cancelled');
     send({ type: 'MG_JOB_DONE', ...ids, url: URL.createObjectURL(blob), ext, warning });
   } catch (e) {
-    console.error('[MediaGrab]', e);
-    send({ type: 'MG_JOB_ERROR', ...ids, error: String(e?.message || e) });
+    if (!sig.aborted) console.error('[MediaGrab]', e);
+    send({ type: 'MG_JOB_ERROR', ...ids, error: sig.aborted ? 'cancelled' : String(e?.message || e) });
+  } finally {
+    controllers.delete(jobId);
   }
 }
 
@@ -81,21 +91,21 @@ function makeProgress(ids, parts) {
   };
 }
 
-async function okFetch(url) {
-  const res = await fetch(url, { credentials: 'include' });
+async function okFetch(url, signal) {
+  const res = await fetch(url, { credentials: 'include', signal });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res;
 }
 
-const getBytes = (src, onProgress, optional = false) =>
-  src.hls ? fetchHls(src.hls, onProgress, optional) : fetchBytes(src.urls, onProgress, optional);
+const getBytes = (src, onProgress, optional = false, signal) =>
+  src.hls ? fetchHls(src.hls, onProgress, optional, signal) : fetchBytes(src.urls, onProgress, optional, signal);
 
 // Try each URL in turn; returns the first one that delivers real media.
-async function fetchBytes(urls, onProgress, optional = false) {
+async function fetchBytes(urls, onProgress, optional = false, signal) {
   let lastErr;
   for (const url of [].concat(urls).filter(Boolean)) {
     try {
-      const res = await okFetch(url);
+      const res = await okFetch(url, signal);
       const type = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
       if (type.startsWith('text/html')) throw new Error('got a web page instead of media');
       const total = Number(res.headers.get('content-length')) || 0;
@@ -111,6 +121,7 @@ async function fetchBytes(urls, onProgress, optional = false) {
       }
       return { bytes: concat(chunks, got), type, url };
     } catch (e) {
+      if (signal?.aborted) throw e; // cancelled: don't try the fallback URLs
       lastErr = e;
     }
   }
@@ -119,9 +130,9 @@ async function fetchBytes(urls, onProgress, optional = false) {
 }
 
 // fMP4 HLS: init segment + media segments concatenated = one fragmented MP4.
-async function fetchHls(url, onProgress, optional = false) {
+async function fetchHls(url, onProgress, optional = false, signal) {
   try {
-    const pl = parseMedia(await (await okFetch(url)).text(), url);
+    const pl = parseMedia(await (await okFetch(url, signal)).text(), url);
     if (pl.ts || pl.byterange || !pl.segments.length) throw new Error('unsupported HLS format');
     const urls = [pl.init, ...pl.segments];
     const parts = new Array(urls.length);
@@ -129,14 +140,14 @@ async function fetchHls(url, onProgress, optional = false) {
     const worker = async () => {
       while (next < urls.length) {
         const i = next++;
-        parts[i] = new Uint8Array(await (await okFetch(urls[i])).arrayBuffer());
+        parts[i] = new Uint8Array(await (await okFetch(urls[i], signal)).arrayBuffer());
         onProgress?.(++done, urls.length);
       }
     };
     await Promise.all(Array.from({ length: Math.min(6, urls.length) }, worker));
     return { bytes: concat(parts, parts.reduce((a, p) => a + p.length, 0)), type: 'video/mp4', url };
   } catch (e) {
-    if (optional) return null;
+    if (optional && !signal?.aborted) return null;
     throw e;
   }
 }

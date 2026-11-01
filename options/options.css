@@ -51,7 +51,7 @@ label > input[type="text"], label > input[type="number"], label > select {
   border-radius: 7px;
 }
 .pair { display: flex; gap: 16px; flex-wrap: wrap; }
-.pair label { flex: 1 1 200px; }
+.pair label { flex: 1 1 150px; }
 label.check { display: flex; gap: 8px; align-items: flex-start; }
 label.check input { margin-top: 4px; accent-color: var(--accent); }
 .preview { color: var(--muted); margin: 8px 0 0; overflow-wrap: anywhere; }

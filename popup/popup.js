@@ -319,6 +319,14 @@ function setStatus(key, j) {
   if (done && j.size) text += ` · ${fmtSize(j.size)}`;
   if (done && j.note) text += ` · ${j.note}`;
   s.replaceChildren(el('span', '', text));
+  if (ACTIVE.has(j.state) && j.jobId) {
+    // Red ✕: cancel the download / compression.
+    const x = el('button', 'cancel', '✕');
+    x.title = j.state === 'compressing' ? 'Cancel compression (keeps the original)' : 'Cancel';
+    x.setAttribute('aria-label', x.title);
+    x.onclick = () => { x.disabled = true; sw({ type: 'MG_CANCEL', jobId: j.jobId }).catch(() => {}); };
+    s.append(x);
+  }
   if (done && (j.path || j.downloadId != null)) {
     s.append(fileButtons(j, r.kind));
     turnToPlay(j.mode === 'audio' ? r.btns?.audio : r.btns?.save, j, r.kind);
