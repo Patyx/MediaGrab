@@ -132,6 +132,8 @@ button:focus-visible { outline: 2px solid var(--save); outline-offset: 2px; }
   margin: 2px 0 6px;
 }
 .row {
+  position: relative;
+  overflow: hidden;
   display: flex;
   gap: 8px;
   align-items: center;
@@ -233,3 +235,26 @@ button.mini:hover { border-color: var(--save); }
 .btns button.toggle:disabled { opacity: .55; cursor: not-allowed; }
 /* Save / Audio after the file is saved: Play / Open */
 button.save.played, button.audio.played { box-shadow: inset 0 0 0 2px color-mix(in srgb, #fff 30%, transparent); }
+
+/* Thin progress bar on the row's bottom edge: download (blue), compression (orange) over it */
+.pbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: color-mix(in srgb, var(--line) 70%, transparent);
+  opacity: 0;
+  transition: opacity .6s .5s; /* lingers briefly when finished, then fades */
+  pointer-events: none;
+}
+.pbar.on { opacity: 1; transition: opacity .2s; }
+.pbar i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; transition: width .3s ease-out; }
+.pbar .dl { background: var(--accent); }
+.pbar .cp { background: var(--save); }
+.pbar.pending .dl { width: 30% !important; animation: mg-pending 1.2s ease-in-out infinite; }
+@keyframes mg-pending { from { left: -30%; } to { left: 100%; } }
+@media (prefers-reduced-motion: reduce) {
+  .pbar i { transition: none; }
+  .pbar.pending .dl { animation: none; left: 0; }
+}

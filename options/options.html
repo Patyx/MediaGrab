@@ -96,9 +96,12 @@
       <p class="note" id="encDetected">Detecting encoders…</p>
       <label>Quality
         <select id="quality">
+          <option value="max">Maximum: near-lossless, biggest (x265 CRF 20 · GPU CQ 20–22)</option>
           <option value="high">High (x265 CRF 22 · GPU CQ 22–24)</option>
           <option value="balanced">Balanced (x265 CRF 24 · GPU CQ 25–27)</option>
           <option value="small">Smaller files (x265 CRF 27 · GPU CQ 28–30)</option>
+          <option value="smaller">Much smaller (x265 CRF 29 · GPU CQ 30–32)</option>
+          <option value="tiny">Tiny: visible softening (x265 CRF 32 · GPU CQ 33–35)</option>
         </select>
       </label>
       <label>CPU encoder speed

@@ -92,8 +92,9 @@ function renderItem(it) {
   const status = el('div', 'status', '');
   meta.append(est, status);
   const btns = saveButtons(() => download([it]), it.kind === 'video' ? () => download([it], 'audio') : null, it.kind);
-  rows.set(it.key, { status, kind: it.kind, est, chipSlot: btns.chipSlot, btns, item: it });
-  row.append(thumb, meta, btns);
+  const bar = progressBar();
+  rows.set(it.key, { status, kind: it.kind, est, chipSlot: btns.chipSlot, btns, item: it, bar });
+  row.append(thumb, meta, btns, bar.el);
   return row;
 }
 
@@ -258,12 +259,35 @@ function turnToPlay(btn, j, kind) {
   btn.onclick = () => openSaved(j, false);
 }
 
+// Thin progress bar along the bottom of a row: blue while downloading, then orange
+// sweeping over it while compressing. Fades out when the job is finished.
+function progressBar() {
+  const elBar = el('div', 'pbar');
+  const dl = el('i', 'dl');
+  const cp = el('i', 'cp');
+  elBar.append(dl, cp);
+  return { el: elBar, dl, cp };
+}
+
+const ACTIVE = new Set(['queued', 'downloading', 'merging', 'saving', 'compressing']);
+function setBar(bar, j) {
+  if (!bar) return;
+  const st = j.state;
+  const dl = st === 'downloading' ? j.pct || 0 : st === 'queued' ? 0 : 100;
+  const cp = st === 'compressing' ? j.pct || 0 : st === 'done' && j.note && /HEVC|stopped early|only saved/.test(j.note) ? 100 : 0;
+  bar.dl.style.width = `${dl}%`;
+  bar.cp.style.width = `${cp}%`;
+  bar.el.classList.toggle('on', ACTIVE.has(st));
+  bar.el.classList.toggle('pending', st === 'queued' || (st === 'downloading' && !j.pct));
+}
+
 function setStatus(key, j) {
   const r = rows.get(key);
   if (!r) return;
   const sig = JSON.stringify(j);
   if (r.sig === sig) return; // unchanged: skip the DOM work
   r.sig = sig;
+  setBar(r.bar, j);
   const s = r.status;
   const done = j.state === 'done';
   let text = (j.via === 'yt-dlp' ? 'yt-dlp · ' : '') + (j.mode === 'audio' ? 'Audio: ' : '') + (TEXT[j.state] || (() => j.state))(j);
@@ -374,7 +398,7 @@ async function renderYtdlp(tab, helper) {
   const est = el('div', 'est', '');
   const status = el('div', 'status', '');
   meta.append(sel, hint, est, status);
-  const row0 = { status, kind: 'video' };
+  const row0 = { status, kind: 'video', bar: progressBar() };
   rows.set(key, row0);
   const btns = saveButtons(
     () => ytdlp(tab.url, false, key, sel.value ? Number(sel.value) : null),
@@ -388,7 +412,7 @@ async function renderYtdlp(tab, helper) {
     btns.chipSlot.append(chip || outdatedChip(helper.version));
   }
   fillQualities(sel, hint, est, chip, key, tab.url);
-  row.append(el('div', 'thumb', '▶'), meta, btns);
+  row.append(el('div', 'thumb', '▶'), meta, btns, row0.bar.el);
   box.append(row);
   listEl.append(box);
 }

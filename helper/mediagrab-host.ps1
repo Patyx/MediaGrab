@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$Version = '1.5.0'
+$Version = '1.5.1'
 $null = Add-Type -AssemblyName System.Windows.Forms
 $null = Add-Type -AssemblyName System.Drawing
 
@@ -387,11 +387,17 @@ function Get-LimitKbps([int]$short, [double]$a720, [double]$a1080) {
   return $a1080 * [math]::Pow([math]::Max(144, $short) / 1080.0, $k2)
 }
 
-# Quality value per encoder for High / Balanced / Smaller (lower = better quality).
+# Quality value per encoder for each preset (lower = better quality, bigger file).
+# Order: max, high, balanced, small, smaller, tiny.
 function Get-Quality([string]$enc, [string]$level) {
-  $i = @{ high = 0; balanced = 1; small = 2 }[$level]
-  if ($null -eq $i) { $i = 1 }
-  $t = @{ x265 = @(22, 24, 27); nvenc = @(24, 27, 30); qsv = @(22, 25, 28); amf = @(22, 25, 28) }[$enc]
+  $i = @{ max = 0; high = 1; balanced = 2; small = 3; smaller = 4; tiny = 5 }[$level]
+  if ($null -eq $i) { $i = 2 }
+  $t = @{
+    x265  = @(20, 22, 24, 27, 29, 32)
+    nvenc = @(22, 24, 27, 30, 32, 35)
+    qsv   = @(20, 22, 25, 28, 30, 33)
+    amf   = @(20, 22, 25, 28, 30, 33)
+  }[$enc]
   return $t[$i]
 }
 
