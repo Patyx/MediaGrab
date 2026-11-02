@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$Version = '1.6.0'
+$Version = '1.6.1'
 $null = Add-Type -AssemblyName System.Windows.Forms
 $null = Add-Type -AssemblyName System.Drawing
 
@@ -425,7 +425,7 @@ function Get-Probe([string]$path) {
   $dur = [double]$j.format.duration
   $size = [int64]$j.format.size
   $vbr = 0.0
-  if ($s.bit_rate) { $vbr = [double]$s.bit_rate } elseif ($dur -gt 0) { $vbr = [math]::Max(0, $size * 8 / $dur - 128000) }
+  if ($s.bit_rate) { $vbr = [double]$s.bit_rate } elseif ($dur -gt 0) { $vbr = [math]::Max(0.0, $size * 8 / $dur - 128000) }
   # Total video frames (for progress): the container's count, else duration x frame rate.
   $frames = [int64]0
   $null = [int64]::TryParse([string]$s.nb_frames, [ref]$frames)
@@ -436,7 +436,7 @@ function Get-Probe([string]$path) {
     if ($fr.Count -ge 2) { $null = [double]::TryParse($fr[1], [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$den) }
     if ($num -gt 0 -and $den -gt 0) { $frames = [int64]($dur * $num / $den) }
   }
-  $audioBytes = [math]::Max(0, $size - $vbr / 8 * $dur)
+  $audioBytes = [math]::Max(0.0, $size - $vbr / 8 * $dur)
   # Audio stream bitrate (0 = no audio).
   $akbps = 0
   $outA = New-Object Collections.Generic.List[string]
@@ -457,7 +457,7 @@ function Get-Probe([string]$path) {
 function Get-LimitKbps([int]$short, [double]$a720, [double]$a1080, [double]$a2160) {
   if ($a720 -le 0 -or $a1080 -le $a720) { $a720 = 3000; $a1080 = 5000 }
   if ($a2160 -le $a1080) { $a2160 = 8000 }
-  $s = [math]::Max(144, $short)
+  $s = [math]::Max(144.0, $short)
   if ($s -le 1080) {
     $k = [math]::Log($a1080 / $a720) / [math]::Log(1080 / 720.0)
   } else {
@@ -475,7 +475,7 @@ function Get-Quality([string]$enc, [string]$level) {
   $x = 24.0
   if ($names.ContainsKey($level)) { $x = [double]$names[$level] }
   elseif (-not [double]::TryParse($level, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$x)) { $x = 24.0 }
-  $x = [math]::Max(20, [math]::Min(32, $x))
+  $x = [math]::Max(20.0, [math]::Min(32.0, $x))
   $ax = @(20, 22, 24, 27, 29, 32)
   $t = @{
     x265  = @(20, 22, 24, 27, 29, 32)
@@ -581,7 +581,7 @@ function Invoke-Compress($m) {
     }
     $tier = $null
     if ($choice -ne 'x265') { $tier = $encs.$choice; if (-not $tier) { $choice = 'x265' } }
-    $cap = [int][math]::Min($limit, [math]::Max(300, $probe.vkbps))
+    $cap = [int][math]::Min($limit, [math]::Max(300.0, $probe.vkbps))
 
     $ff = Get-Ff 'ffmpeg'
     $tmp = "$outPath.mg-hevc.mp4"
@@ -607,10 +607,10 @@ function Invoke-Compress($m) {
       }
       # Progress = encoded video frames / total. (out_time follows the copied audio, which
       # races ahead of the video encoder, so it is only a fallback.)
-      if ($state.frames -gt 0) { $frac = [math]::Min(1, $state.f / $state.frames) }
-      elseif ($state.dur -gt 0) { $frac = [math]::Min(1, $state.t / $state.dur) }
+      if ($state.frames -gt 0) { $frac = [math]::Min(1.0, $state.f / $state.frames) }
+      elseif ($state.dur -gt 0) { $frac = [math]::Min(1.0, $state.t / $state.dur) }
       else { return }
-      $pct = [int][math]::Min(99, $frac * 100)
+      $pct = [int][math]::Min(99.0, $frac * 100)
       $now = [Environment]::TickCount
       if ($pct -ne $state.last -or ($now - $state.sent) -ge 1000) {
         $state.last = $pct
@@ -620,8 +620,8 @@ function Invoke-Compress($m) {
       # From 20% on, project the final size (audio is copied as-is, video scales with
       # progress); stop early if it won't save enough.
       if ($frac -ge 0.2 -and $state.bytes -gt 0) {
-        $audioDone = $state.audio * $(if ($state.dur -gt 0) { [math]::Min(1, $state.t / $state.dur) } else { $frac })
-        $state.projected = $state.audio + [math]::Max(0, $state.bytes - $audioDone) / $frac
+        $audioDone = $state.audio * $(if ($state.dur -gt 0) { [math]::Min(1.0, $state.t / $state.dur) } else { $frac })
+        $state.projected = $state.audio + [math]::Max(0.0, $state.bytes - $audioDone) / $frac
         if ($state.projected -gt $state.orig * (1 - $state.min / 100)) { return 'abort' }
       }
     }
