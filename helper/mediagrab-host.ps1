@@ -6,7 +6,7 @@
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$Version = '1.6.1'
+$Version = '1.6.2'
 $null = Add-Type -AssemblyName System.Windows.Forms
 $null = Add-Type -AssemblyName System.Drawing
 
@@ -629,7 +629,10 @@ function Invoke-Compress($m) {
       param($enc, $tr)
       $q = Get-Quality $enc ([string]$m.quality)
       $audioArgs = $(if ($reAudio) { @('-c:a', 'aac', '-b:a', "${aTarget}k") } else { @('-c:a', 'copy') })
-      $argv = @('-hide_banner', '-nostdin', '-y', '-v', 'error', '-i', $in, '-map', '0:v:0', '-map', '0:a?') + $audioArgs +
+      # -fps_mode passthrough: keep every frame with its timestamp (MP4 output would otherwise
+      # turn variable-frame-rate video, e.g. TikTok/Instagram/phone clips, into constant frame
+      # rate by duplicating or dropping frames).
+      $argv = @('-hide_banner', '-nostdin', '-y', '-v', 'error', '-i', $in, '-map', '0:v:0', '-map', '0:a?', '-fps_mode', 'passthrough') + $audioArgs +
         (Get-EncoderArgs $enc $q $cap $tr ([string]$m.x265Preset)) +
         @('-tag:v', 'hvc1', '-movflags', '+faststart', '-map_metadata', '0', '-stats', '-stats_period', '0.5', '-progress', 'pipe:2', $tmp)
       return Invoke-Ffmpeg $ff $argv $onLine (Join-Path $Root 'last-compress.log')
